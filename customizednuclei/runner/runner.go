@@ -114,6 +114,7 @@ func (r *Runner) Execute(ctx context.Context, templatePath string) (*ExecResult,
 	defer pre.cleanup()
 
 	if pre.skip {
+		gologger.Error().Msgf("[%s] skipped: non-HTTP content or unsupported template type", templatePath)
 		return &ExecResult{TemplateID: templatePath, Skipped: true}, nil
 	}
 
@@ -125,6 +126,7 @@ func (r *Runner) Execute(ctx context.Context, templatePath string) (*ExecResult,
 	}
 	// nil means the template registered as a global matcher — nothing to run.
 	if tmpl == nil {
+		gologger.Error().Msgf("[%s] skipped: parsed as nil (global matcher/extractor)", templatePath)
 		return &ExecResult{TemplateID: templatePath, Skipped: true}, nil
 	}
 	// Restore original path so log messages show the real template ID/path.

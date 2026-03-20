@@ -56,10 +56,11 @@ func main() {
 	var stats struct {
 		total           int
 		skipped         int
-		errored         int
-		requestsDefined int
-		requestsFired   int
-		statusCodes     map[int]int
+		errored            int
+		requestsDefined    int
+		requestsFired      int
+		incompleteTemplate int
+		statusCodes        map[int]int
 		rowsWritten     int // tracks rows for periodic flush
 	}
 	stats.total = len(templates)
@@ -121,14 +122,22 @@ func main() {
 				}
 				stats.requestsDefined += res.RequestsDefined
 				stats.requestsFired += res.RequestsFired
+				if res.RequestsFired < res.RequestsDefined {
+					stats.incompleteTemplate++
+				}
 				for code, count := range res.StatusCodes {
 					stats.statusCodes[code] += count
+				}
+				completed := "true"
+				if res.RequestsFired < res.RequestsDefined {
+					completed = "false"
 				}
 				csvWriter.Write([]string{ //nolint:errcheck
 					res.TemplateID,
 					t,
 					strconv.Itoa(res.RequestsDefined),
 					strconv.Itoa(res.RequestsFired),
+					completed,
 					formatStatusCodes(res.StatusCodes),
 				})
 				stats.rowsWritten++
@@ -142,10 +151,10 @@ func main() {
 
 	wg.Wait()
 
-	printStats(stats.total, stats.skipped, stats.errored, stats.requestsDefined, stats.requestsFired, stats.statusCodes)
+	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired, stats.statusCodes)
 }
 
-func printStats(total, skipped, errored, defined, fired int, statusCodes map[int]int) {
+func printStats(total, skipped, errored, incomplete, defined, fired int, statusCodes map[int]int) {
 	sep := strings.Repeat("─", 60)
 	fmt.Printf("\n%s\n", sep)
 	fmt.Printf("Templates : %d total", total)
@@ -154,6 +163,9 @@ func printStats(total, skipped, errored, defined, fired int, statusCodes map[int
 	}
 	if errored > 0 {
 		fmt.Printf("  (%d errored)", errored)
+	}
+	if incomplete > 0 {
+		fmt.Printf("  (%d incomplete)", incomplete)
 	}
 	fmt.Println()
 	fmt.Printf("Requests  : %d defined / %d fired\n", defined, fired)
@@ -179,7 +191,7 @@ func openCSV(path string) (*os.File, *csv.Writer, error) {
 		return nil, nil, err
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "status_codes"})
+	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "completed", "status_codes"})
 	return f, w, nil
 }
 
