@@ -61,9 +61,10 @@ func main() {
 		requestsDefined    int
 		requestsFired      int
 		incompleteTemplate int
-		prevented          int
-		passed             int
-		unknown            int
+		preventedComplete     int
+		passedComplete        int
+		preventedIncomplete   int
+		unknownIncomplete     int
 		statusCodesComplete   map[int]int
 		statusCodesIncomplete map[int]int
 		rowsWritten        int // tracks rows for periodic flush
@@ -138,28 +139,32 @@ func main() {
 						stats.statusCodesComplete[code] += count
 					}
 				}
-				completed := "true"
-				if res.RequestsFired < res.RequestsDefined {
-					completed = "false"
-				}
-
-				bypassStatus := "pass"
+				isComplete := res.RequestsFired == res.RequestsDefined
+				isPrevented := false
 				for code := range res.StatusCodes {
 					if code >= 400 && code < 500 {
-						bypassStatus = "prevented"
+						isPrevented = true
 						break
 					}
 				}
-				if bypassStatus != "prevented" && res.RequestsFired < res.RequestsDefined {
-					bypassStatus = "unknown"
-				}
 
-				if bypassStatus == "prevented" {
-					stats.prevented++
-				} else if bypassStatus == "pass" {
-					stats.passed++
+				var bypassStatus string
+				if isComplete {
+					if isPrevented {
+						bypassStatus = "prevented"
+						stats.preventedComplete++
+					} else {
+						bypassStatus = "pass"
+						stats.passedComplete++
+					}
 				} else {
-					stats.unknown++
+					if isPrevented {
+						bypassStatus = "prevented"
+						stats.preventedIncomplete++
+					} else {
+						bypassStatus = "unknown"
+						stats.unknownIncomplete++
+					}
 				}
 
 				csvWriter.Write([]string{ //nolint:errcheck
@@ -167,7 +172,7 @@ func main() {
 					t,
 					strconv.Itoa(res.RequestsDefined),
 					strconv.Itoa(res.RequestsFired),
-					completed,
+					strconv.FormatBool(isComplete),
 					bypassStatus,
 					formatStatusCodes(res.StatusCodes),
 				})
@@ -182,10 +187,12 @@ func main() {
 
 	wg.Wait()
 
-	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired, stats.prevented, stats.passed, stats.unknown, stats.statusCodesComplete, stats.statusCodesIncomplete)
+	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired,
+		stats.preventedComplete, stats.passedComplete, stats.preventedIncomplete, stats.unknownIncomplete,
+		stats.statusCodesComplete, stats.statusCodesIncomplete)
 }
 
-func printStats(total, skipped, errored, incomplete, defined, fired, prevented, passed, unknown int, statusCodesComplete map[int]int, statusCodesIncomplete map[int]int) {
+func printStats(total, skipped, errored, incomplete, defined, fired, prevComp, passComp, prevIncomp, unkIncomp int, statusCodesComplete map[int]int, statusCodesIncomplete map[int]int) {
 	sep := strings.Repeat("─", 60)
 	fmt.Printf("\n%s\n", sep)
 	fmt.Printf("Templates : %d total", total)
@@ -200,16 +207,15 @@ func printStats(total, skipped, errored, incomplete, defined, fired, prevented, 
 	}
 	fmt.Println()
 	fmt.Printf("Requests  : %d defined / %d fired\n", defined, fired)
-	if prevented+passed+unknown > 0 {
-		totalExec := prevented + passed + unknown
-		pctPrev := float64(prevented) / float64(totalExec) * 100
-		pctPass := float64(passed) / float64(totalExec) * 100
-		pctUnk := float64(unknown) / float64(totalExec) * 100
-		if unknown > 0 {
-			fmt.Printf("Bypass    : %d prevented (%.1f%%) / %d passed (%.1f%%) / %d unknown (%.1f%%)\n", prevented, pctPrev, passed, pctPass, unknown, pctUnk)
-		} else {
-			fmt.Printf("Bypass    : %d prevented (%.1f%%) / %d passed (%.1f%%)\n", prevented, pctPrev, passed, pctPass)
-		}
+	if totalExecComp := prevComp + passComp; totalExecComp > 0 {
+		pctPrev := float64(prevComp) / float64(totalExecComp) * 100
+		pctPass := float64(passComp) / float64(totalExecComp) * 100
+		fmt.Printf("Bypass (Complete)   : %d prevented (%.1f%%) / %d passed (%.1f%%)\n", prevComp, pctPrev, passComp, pctPass)
+	}
+	if totalExecIncomp := prevIncomp + unkIncomp; totalExecIncomp > 0 {
+		pctPrev := float64(prevIncomp) / float64(totalExecIncomp) * 100
+		pctUnk := float64(unkIncomp) / float64(totalExecIncomp) * 100
+		fmt.Printf("Bypass (Incomplete) : %d prevented (%.1f%%) / %d unknown (%.1f%%)\n", prevIncomp, pctPrev, unkIncomp, pctUnk)
 	}
 	if len(statusCodesComplete) > 0 {
 		fmt.Printf("Stats (Complete)   : %s\n", formatStatusCodes(statusCodesComplete))
