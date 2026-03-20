@@ -2,29 +2,28 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
+	"time"
 
-	"customizednuclei/runner"
+	"customizednuclei/internal/output"
+	"customizednuclei/internal/runner"
+	tmplcollect "customizednuclei/internal/template"
 )
 
 func main() {
 	templatePath := flag.String("template", "", "Path to a nuclei template (.yaml) or a directory of templates")
 	target := flag.String("target", "", "Target URL (e.g. https://example.com)")
 	logLevel := flag.String("log-level", "info", "Log level: fatal | silent | error | info | warning | debug | verbose")
-	output := flag.String("output", "results.csv", "CSV output file path")
+	outputPath := flag.String("output", "results.csv", "CSV output file path")
 	cveFilter := flag.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
-	concurrency := flag.Int("c", 5, "Number of concurrent workers") // New flag for concurrency
+	concurrency := flag.Int("c", 5, "Number of concurrent workers")
+	noPreprocess := flag.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
 	flag.Parse()
 
 	if *templatePath == "" || *target == "" {
@@ -36,13 +35,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	templates, err := collectTemplates(*templatePath, *cveFilter)
+	templates, err := tmplcollect.Collect(*templatePath, *cveFilter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "template discovery error: %v\n", err)
 		os.Exit(1)
 	}
 
-	csvFile, csvWriter, err := openCSV(*output)
+	csvFile, csvWriter, err := output.OpenCSV(*outputPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open output csv: %v\n", err)
 		os.Exit(1)
@@ -52,26 +51,8 @@ func main() {
 		csvFile.Close()
 	}()
 
-	// Shared stats — protected by mu.
 	var mu sync.Mutex
-	var stats struct {
-		total           int
-		skipped         int
-		errored            int
-		requestsDefined    int
-		requestsFired      int
-		incompleteTemplate int
-		preventedComplete     int
-		passedComplete        int
-		preventedIncomplete   int
-		unknownIncomplete     int
-		statusCodesComplete   map[int]int
-		statusCodesIncomplete map[int]int
-		rowsWritten        int // tracks rows for periodic flush
-	}
-	stats.total = len(templates)
-	stats.statusCodesComplete = make(map[int]int)
-	stats.statusCodesIncomplete = make(map[int]int)
+	stats := output.NewStats(len(templates))
 
 	// Clamp concurrency to [1, len(templates)].
 	nWorkers := *concurrency
@@ -89,6 +70,50 @@ func main() {
 	}
 	close(jobs)
 
+	// Start real-time progress bar
+	startTime := time.Now()
+	var progressWg sync.WaitGroup
+	progressWg.Add(1)
+	printProgress := func() {
+		mu.Lock()
+		rowsWritten := stats.RowsWritten
+		skippedErr := stats.Skipped + stats.Errored
+		completed := rowsWritten + skippedErr
+		reqs := stats.RequestsFired
+		mu.Unlock()
+
+		elapsed := time.Since(startTime)
+		speed := 0.0
+		if elapsed.Seconds() > 0 {
+			speed = float64(reqs) / elapsed.Seconds()
+		}
+		msg := fmt.Sprintf("[Workers: %d] Processed: %d/%d (Run: %d, Skip/Err: %d) | Requests Fired: %d | Speed: %.0f req/s | Elapsed: %s",
+			nWorkers, completed, stats.Total, rowsWritten, skippedErr, reqs, speed, elapsed.Round(time.Second))
+		// Print with padded spaces to clear trailing characters
+		fmt.Printf("\r%-110s", msg)
+	}
+
+	go func() {
+		defer progressWg.Done()
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				printProgress()
+				
+				mu.Lock()
+				completed := stats.RowsWritten + stats.Skipped + stats.Errored
+				mu.Unlock()
+				if completed >= stats.Total {
+					return
+				}
+			}
+		}
+	}()
+
 	var wg sync.WaitGroup
 	for i := 0; i < nWorkers; i++ {
 		wg.Add(1)
@@ -100,7 +125,7 @@ func main() {
 			if err != nil {
 				mu.Lock()
 				fmt.Fprintf(os.Stderr, "worker init error: %v\n", err)
-				stats.errored++
+				stats.Errored++
 				mu.Unlock()
 				return
 			}
@@ -113,30 +138,30 @@ func main() {
 				default:
 				}
 
-				res, err := r.Execute(ctx, t)
+				res, err := r.Execute(ctx, t, !*noPreprocess)
 
 				mu.Lock()
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] execute error: %v\n", t, err)
-					stats.errored++
+					stats.Errored++
 					mu.Unlock()
 					continue
 				}
 				if res.Skipped {
-					stats.skipped++
+					stats.Skipped++
 					mu.Unlock()
 					continue
 				}
-				stats.requestsDefined += res.RequestsDefined
-				stats.requestsFired += res.RequestsFired
+				stats.RequestsDefined += res.RequestsDefined
+				stats.RequestsFired += res.RequestsFired
 				if res.RequestsFired < res.RequestsDefined {
-					stats.incompleteTemplate++
+					stats.IncompleteTemplate++
 					for code, count := range res.StatusCodes {
-						stats.statusCodesIncomplete[code] += count
+						stats.StatusCodesIncomplete[code] += count
 					}
 				} else {
 					for code, count := range res.StatusCodes {
-						stats.statusCodesComplete[code] += count
+						stats.StatusCodesComplete[code] += count
 					}
 				}
 				isComplete := res.RequestsFired == res.RequestsDefined
@@ -152,18 +177,18 @@ func main() {
 				if isComplete {
 					if isPrevented {
 						bypassStatus = "prevented"
-						stats.preventedComplete++
+						stats.PreventedComplete++
 					} else {
 						bypassStatus = "pass"
-						stats.passedComplete++
+						stats.PassedComplete++
 					}
 				} else {
 					if isPrevented {
 						bypassStatus = "prevented"
-						stats.preventedIncomplete++
+						stats.PreventedIncomplete++
 					} else {
 						bypassStatus = "unknown"
-						stats.unknownIncomplete++
+						stats.UnknownIncomplete++
 					}
 				}
 
@@ -174,10 +199,10 @@ func main() {
 					strconv.Itoa(res.RequestsFired),
 					strconv.FormatBool(isComplete),
 					bypassStatus,
-					formatStatusCodes(res.StatusCodes),
+					output.FormatStatusCodes(res.StatusCodes),
 				})
-				stats.rowsWritten++
-				if stats.rowsWritten%50 == 0 {
+				stats.RowsWritten++
+				if stats.RowsWritten%50 == 0 {
 					csvWriter.Flush()
 				}
 				mu.Unlock()
@@ -186,137 +211,6 @@ func main() {
 	}
 
 	wg.Wait()
-
-	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired,
-		stats.preventedComplete, stats.passedComplete, stats.preventedIncomplete, stats.unknownIncomplete,
-		stats.statusCodesComplete, stats.statusCodesIncomplete)
-}
-
-func printStats(total, skipped, errored, incomplete, defined, fired, prevComp, passComp, prevIncomp, unkIncomp int, statusCodesComplete map[int]int, statusCodesIncomplete map[int]int) {
-	sep := strings.Repeat("─", 60)
-	fmt.Printf("\n%s\n", sep)
-	fmt.Printf("Templates : %d total", total)
-	if skipped > 0 {
-		fmt.Printf("  (%d skipped)", skipped)
-	}
-	if errored > 0 {
-		fmt.Printf("  (%d errored)", errored)
-	}
-	if incomplete > 0 {
-		fmt.Printf("  (%d incomplete)", incomplete)
-	}
-	fmt.Println()
-	fmt.Printf("Requests  : %d defined / %d fired\n", defined, fired)
-	if totalExecComp := prevComp + passComp; totalExecComp > 0 {
-		pctPrev := float64(prevComp) / float64(totalExecComp) * 100
-		pctPass := float64(passComp) / float64(totalExecComp) * 100
-		fmt.Printf("Bypass (Complete)   : %d prevented (%.1f%%) / %d passed (%.1f%%)\n", prevComp, pctPrev, passComp, pctPass)
-	}
-	if totalExecIncomp := prevIncomp + unkIncomp; totalExecIncomp > 0 {
-		pctPrev := float64(prevIncomp) / float64(totalExecIncomp) * 100
-		pctUnk := float64(unkIncomp) / float64(totalExecIncomp) * 100
-		fmt.Printf("Bypass (Incomplete) : %d prevented (%.1f%%) / %d unknown (%.1f%%)\n", prevIncomp, pctPrev, unkIncomp, pctUnk)
-	}
-	if len(statusCodesComplete) > 0 {
-		fmt.Printf("Stats (Complete)   : %s\n", formatStatusCodes(statusCodesComplete))
-	}
-	if len(statusCodesIncomplete) > 0 {
-		fmt.Printf("Stats (Incomplete) : %s\n", formatStatusCodes(statusCodesIncomplete))
-	}
-	fmt.Printf("%s\n", sep)
-}
-
-func openCSV(path string) (*os.File, *csv.Writer, error) {
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	w := csv.NewWriter(f)
-	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "completed", "bypass_status", "status_codes"})
-	return f, w, nil
-}
-
-// collectTemplates returns a list of .yaml template paths.
-// If path points to a file it returns that file; if it points to a directory
-// it walks the entire tree and collects every .yaml / .yml file.
-// If cveFilter is provided, it only descends into direct subdirectories
-// that match the allowed years/folders.
-func collectTemplates(basePath, cveFilter string) ([]string, error) {
-	info, err := os.Stat(basePath)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return []string{basePath}, nil
-	}
-
-	allowed := parseCVEFilter(cveFilter)
-	cleanBasePath := filepath.Clean(basePath)
-	var templates []string
-
-	err = filepath.WalkDir(basePath, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if len(allowed) > 0 && p != cleanBasePath && filepath.Dir(p) == cleanBasePath {
-				if !allowed[d.Name()] {
-					return fs.SkipDir
-				}
-			}
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(p))
-		if ext == ".yaml" || ext == ".yml" {
-			templates = append(templates, p)
-		}
-		return nil
-	})
-	return templates, err
-}
-
-func formatStatusCodes(codes map[int]int) string {
-	if len(codes) == 0 {
-		return ""
-	}
-	var parts []string
-	var sortedKeys []int
-	for k := range codes {
-		sortedKeys = append(sortedKeys, k)
-	}
-	sort.Ints(sortedKeys)
-
-	for _, k := range sortedKeys {
-		parts = append(parts, fmt.Sprintf("%d:%d", k, codes[k]))
-	}
-	return strings.Join(parts, ",")
-}
-
-func parseCVEFilter(filter string) map[string]bool {
-	allowed := make(map[string]bool)
-	if filter == "" {
-		return allowed
-	}
-	parts := strings.Split(filter, ",")
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if strings.Contains(p, "-") {
-			bounds := strings.SplitN(p, "-", 2)
-			if len(bounds) == 2 {
-				start, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
-				end, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
-				if err1 == nil && err2 == nil && start <= end {
-					for i := start; i <= end; i++ {
-						allowed[strconv.Itoa(i)] = true
-					}
-					continue
-				}
-			}
-		}
-		// If not a range or range failed to parse, add exactly as literal
-		if p != "" {
-			allowed[p] = true
-		}
-	}
-	return allowed
+	printProgress()
+	output.PrintStats(stats)
 }

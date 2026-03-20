@@ -1,4 +1,4 @@
-package runner
+package preprocess
 
 import (
 	"fmt"
@@ -9,17 +9,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// preprocessResult is returned by preprocessTemplate.
-type preprocessResult struct {
-	path    string // temp file path to pass to templates.Parse
-	skip    bool   // true when the template has no HTTP block (e.g. javascript:/dns-only)
-	cleanup func() // removes the temp file; always safe to call even when skip==true
+// Result is returned by PreprocessTemplate.
+type Result struct {
+	Path    string // temp file path to pass to templates.Parse
+	Skip    bool   // true when the template has no HTTP block (e.g. javascript:/dns-only)
+	Cleanup func() // removes the temp file; always safe to call even when Skip==true
 }
 
 // nopCleanup is a no-op cleanup used for skipped templates.
 func nopCleanup() {}
 
-// preprocessTemplate applies the WAF-testing pipeline to a single template
+// PreprocessTemplate applies the WAF-testing pipeline to a single template
 // file without touching the original:
 //
 //  1. Skip templates with no `http:` block (javascript:, dns-only, etc.)
@@ -34,7 +34,7 @@ func nopCleanup() {}
 //
 // The modified template is written to a unique temp file; caller must invoke
 // result.cleanup() after execution to remove it.
-func preprocessTemplate(templatePath string) (*preprocessResult, error) {
+func PreprocessTemplate(templatePath string) (*Result, error) {
 	raw, err := os.ReadFile(templatePath)
 	if err != nil {
 		return nil, fmt.Errorf("read template: %w", err)
@@ -56,11 +56,11 @@ func preprocessTemplate(templatePath string) (*preprocessResult, error) {
 	// Step 1 — skip if there is no HTTP block.
 	httpRaw, hasHTTP := doc["http"]
 	if !hasHTTP {
-		return &preprocessResult{skip: true, cleanup: nopCleanup}, nil
+		return &Result{Skip: true, Cleanup: nopCleanup}, nil
 	}
 	httpBlocks, ok := httpRaw.([]interface{})
 	if !ok || len(httpBlocks) == 0 {
-		return &preprocessResult{skip: true, cleanup: nopCleanup}, nil
+		return &Result{Skip: true, Cleanup: nopCleanup}, nil
 	}
 
 	// Step 2 — remove flow directive.
@@ -169,8 +169,8 @@ func preprocessTemplate(templatePath string) (*preprocessResult, error) {
 	tmp.Close()
 
 	name := tmp.Name()
-	return &preprocessResult{
-		path:    name,
-		cleanup: func() { os.Remove(name) },
+	return &Result{
+		Path:    name,
+		Cleanup: func() { os.Remove(name) },
 	}, nil
 }

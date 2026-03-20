@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+
+	"customizednuclei/internal/preprocess"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/gologger/levels"
@@ -58,6 +61,11 @@ func New(ctx context.Context, target, logLevel string) (*Runner, error) {
 		return nil, fmt.Errorf("create nuclei engine: %w", err)
 	}
 
+	// Nuclei SDK forces a noisy output writer via init() -> applyRequiredDefaults()
+	// that directly calls fmt.Println for every match. We overwrite it here
+	// to ensure the engine is completely silent. We track matches ourselves manually.
+	engine.GetExecuterOptions().Output = testutils.NewMockOutputWriter(false)
+
 	engine.Options().StoreResponse = true
 	engine.Options().Debug = true
 	engine.Options().DebugRequests = true
@@ -106,27 +114,39 @@ type ExecResult struct {
 
 // Execute preprocesses a template (strips flow/matchers, injects catch-all),
 // parses it, fires all HTTP requests against the target, and prints any matches.
-func (r *Runner) Execute(ctx context.Context, templatePath string) (*ExecResult, error) {
-	pre, err := preprocessTemplate(templatePath)
-	if err != nil {
-		return nil, fmt.Errorf("preprocess %q: %w", templatePath, err)
-	}
-	defer pre.cleanup()
+// When applyPreprocess is false the original template is passed directly to
+// Nuclei without any modification — useful for backend simulation mode.
+func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreprocess bool) (*ExecResult, error) {
+	var parsePath string
+	var cleanupFn func()
 
-	if pre.skip {
-		gologger.Error().Msgf("[%s] skipped: non-HTTP content or unsupported template type", templatePath)
-		return &ExecResult{TemplateID: templatePath, Skipped: true}, nil
+	if applyPreprocess {
+		pre, err := preprocess.PreprocessTemplate(templatePath)
+		if err != nil {
+			return nil, fmt.Errorf("preprocess %q: %w", templatePath, err)
+		}
+		defer pre.Cleanup()
+		if pre.Skip {
+			gologger.Warning().Msgf("[%s] skipped: non-HTTP content or unsupported template type", templatePath)
+			return &ExecResult{TemplateID: templatePath, Skipped: true}, nil
+		}
+		parsePath = pre.Path
+		cleanupFn = pre.Cleanup
+	} else {
+		parsePath = templatePath
+		cleanupFn = func() {}
 	}
+	defer cleanupFn()
 
 	opts := r.engine.GetExecuterOptions()
 
-	tmpl, err := templates.Parse(pre.path, nil, opts)
+	tmpl, err := templates.Parse(parsePath, nil, opts)
 	if err != nil {
 		return nil, fmt.Errorf("parse template %q: %w", templatePath, err)
 	}
 	// nil means the template registered as a global matcher — nothing to run.
 	if tmpl == nil {
-		gologger.Error().Msgf("[%s] skipped: parsed as nil (global matcher/extractor)", templatePath)
+		gologger.Warning().Msgf("[%s] skipped: parsed as nil (global matcher/extractor)", templatePath)
 		return &ExecResult{TemplateID: templatePath, Skipped: true}, nil
 	}
 	// Restore original path so log messages show the real template ID/path.
@@ -135,35 +155,39 @@ func (r *Runner) Execute(ctx context.Context, templatePath string) (*ExecResult,
 	ctxArgs := contextargs.NewWithInput(ctx, r.target)
 	scanCtx := scan.NewScanContext(ctx, ctxArgs)
 
-	// OnResult fires per event and carries the raw InternalEvent map (status code,
-	// response headers before Nuclei post-processes them into ResultEvent fields).
-	var internalEvents []*output.InternalWrappedEvent
+	// Stream results: calculate stats on-the-fly without keeping massive arrays in memory.
+	// This prevents Out-Of-Memory (OOM) when fuzzing with millions of payloads.
+	statusCodes := make(map[int]int)
+	var requestsFired int
+	var mu sync.Mutex
+
 	scanCtx.OnResult = func(e *output.InternalWrappedEvent) {
 		if e != nil {
-			internalEvents = append(internalEvents, e)
+			code := extractStatusCode(e)
+			mu.Lock()
+			statusCodes[code]++
+			requestsFired++
+			mu.Unlock()
 		}
 	}
 
-	results, err := tmpl.Executer.ExecuteWithResults(scanCtx)
+	// Use ExecuteWithResults instead of Execute so that our custom OnResult
+	// callback doesn't get overwritten. Because our patched templates use a
+	// "false" match-all, e.Results will remain empty, thus preventing the OOM
+	// accumulation in scanCtx.results naturally.
+	resSlice, err := tmpl.Executer.ExecuteWithResults(scanCtx)
 	if err != nil {
 		return nil, fmt.Errorf("execute template %q: %w", tmpl.ID, err)
 	}
 
-	// Tally HTTP status codes across all fired requests.
-	statusCodes := make(map[int]int)
-	for _, e := range internalEvents {
-		code := extractStatusCode(e)
-		statusCodes[code]++
-	}
-
-	printResults(results)
-	return &ExecResult{
+	execRes := &ExecResult{
 		TemplateID:      tmpl.ID,
-		Matched:         len(results),
+		Matched:         len(resSlice), // We expect 0 here due to dsl:["false"], but capturing it just in case
 		RequestsDefined: tmpl.Executer.Requests(),
-		RequestsFired:   len(internalEvents),
+		RequestsFired:   requestsFired,
 		StatusCodes:     statusCodes,
-	}, nil
+	}
+	return execRes, nil
 }
 
 // Close shuts down the underlying Nuclei engine and frees its resources.
@@ -171,17 +195,7 @@ func (r *Runner) Close() {
 	r.engine.Close()
 }
 
-// printResults prints a compact match summary for each ResultEvent.
-// Raw request/response are already shown via gologger [INF]/[DBG] dump lines.
-func printResults(results []*output.ResultEvent) {
-	// NOTE: match logging disabled — catch-all matcher means every request
-	// "matches"; we don't distinguish matched vs unmatched at this stage.
-	_ = results
-	// for i, r := range results {
-	// 	fmt.Printf("[%s] match #%d  url:%s  type:%s  time:%s\n",
-	// 		r.TemplateID, i+1, r.Matched, r.Type, r.Timestamp.Format("2006-01-02 15:04:05"))
-	// }
-}
+// printResults has been removed as it required massive memory allocation for ResultEvents array.
 
 // extractStatusCode reads the HTTP status code from a Nuclei InternalWrappedEvent.
 // Priority:
