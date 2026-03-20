@@ -73,6 +73,7 @@ func preprocessTemplate(templatePath string) (*preprocessResult, error) {
 			continue
 		}
 		m["stop-at-first-match"] = false
+		m["skip-variables-check"] = true
 		delete(m, "matchers-condition")
 		m["matchers"] = catchAllMatcher()
 	}
@@ -80,6 +81,18 @@ func preprocessTemplate(templatePath string) (*preprocessResult, error) {
 	// Step 5 — inject placeholder values for all internal extractor variables
 	// so downstream requests stay well-formed when WAF blocks an earlier step.
 	injectExtractorPlaceholders(doc)
+
+	// Step 5.1 — violently remove extractors so Nuclei never runs them. If
+	// left intact, an overly broad regex might accidentally extract HTML tags
+	// from a WAF 403 page and inject garbage into downstream raw requests,
+	// crashing the parser (e.g. CVE-2024-1561).
+	for _, block := range httpBlocks {
+		m, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		delete(m, "extractors")
+	}
 
 	// Step 5.5a — remove self-referential variables (e.g. path: "{{path}}")
 	// that create circular evaluation and mask the matching Nuclei DSL built-in.

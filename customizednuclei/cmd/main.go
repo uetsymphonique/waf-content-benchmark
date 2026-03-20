@@ -23,6 +23,7 @@ func main() {
 	target := flag.String("target", "", "Target URL (e.g. https://example.com)")
 	logLevel := flag.String("log-level", "info", "Log level: fatal | silent | error | info | warning | debug | verbose")
 	output := flag.String("output", "results.csv", "CSV output file path")
+	cveFilter := flag.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
 	concurrency := flag.Int("c", 5, "Number of concurrent workers") // New flag for concurrency
 	flag.Parse()
 
@@ -35,7 +36,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	templates, err := collectTemplates(*templatePath)
+	templates, err := collectTemplates(*templatePath, *cveFilter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "template discovery error: %v\n", err)
 		os.Exit(1)
@@ -60,11 +61,16 @@ func main() {
 		requestsDefined    int
 		requestsFired      int
 		incompleteTemplate int
-		statusCodes        map[int]int
-		rowsWritten     int // tracks rows for periodic flush
+		prevented          int
+		passed             int
+		unknown            int
+		statusCodesComplete   map[int]int
+		statusCodesIncomplete map[int]int
+		rowsWritten        int // tracks rows for periodic flush
 	}
 	stats.total = len(templates)
-	stats.statusCodes = make(map[int]int)
+	stats.statusCodesComplete = make(map[int]int)
+	stats.statusCodesIncomplete = make(map[int]int)
 
 	// Clamp concurrency to [1, len(templates)].
 	nWorkers := *concurrency
@@ -124,20 +130,45 @@ func main() {
 				stats.requestsFired += res.RequestsFired
 				if res.RequestsFired < res.RequestsDefined {
 					stats.incompleteTemplate++
-				}
-				for code, count := range res.StatusCodes {
-					stats.statusCodes[code] += count
+					for code, count := range res.StatusCodes {
+						stats.statusCodesIncomplete[code] += count
+					}
+				} else {
+					for code, count := range res.StatusCodes {
+						stats.statusCodesComplete[code] += count
+					}
 				}
 				completed := "true"
 				if res.RequestsFired < res.RequestsDefined {
 					completed = "false"
 				}
+
+				bypassStatus := "pass"
+				for code := range res.StatusCodes {
+					if code >= 400 && code < 500 {
+						bypassStatus = "prevented"
+						break
+					}
+				}
+				if bypassStatus != "prevented" && res.RequestsFired < res.RequestsDefined {
+					bypassStatus = "unknown"
+				}
+
+				if bypassStatus == "prevented" {
+					stats.prevented++
+				} else if bypassStatus == "pass" {
+					stats.passed++
+				} else {
+					stats.unknown++
+				}
+
 				csvWriter.Write([]string{ //nolint:errcheck
 					res.TemplateID,
 					t,
 					strconv.Itoa(res.RequestsDefined),
 					strconv.Itoa(res.RequestsFired),
 					completed,
+					bypassStatus,
 					formatStatusCodes(res.StatusCodes),
 				})
 				stats.rowsWritten++
@@ -151,10 +182,10 @@ func main() {
 
 	wg.Wait()
 
-	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired, stats.statusCodes)
+	printStats(stats.total, stats.skipped, stats.errored, stats.incompleteTemplate, stats.requestsDefined, stats.requestsFired, stats.prevented, stats.passed, stats.unknown, stats.statusCodesComplete, stats.statusCodesIncomplete)
 }
 
-func printStats(total, skipped, errored, incomplete, defined, fired int, statusCodes map[int]int) {
+func printStats(total, skipped, errored, incomplete, defined, fired, prevented, passed, unknown int, statusCodesComplete map[int]int, statusCodesIncomplete map[int]int) {
 	sep := strings.Repeat("─", 60)
 	fmt.Printf("\n%s\n", sep)
 	fmt.Printf("Templates : %d total", total)
@@ -169,18 +200,22 @@ func printStats(total, skipped, errored, incomplete, defined, fired int, statusC
 	}
 	fmt.Println()
 	fmt.Printf("Requests  : %d defined / %d fired\n", defined, fired)
-	if len(statusCodes) > 0 {
-		fmt.Print("Status    : ")
-		var parts []string
-		var sortedKeys []int
-		for k := range statusCodes {
-			sortedKeys = append(sortedKeys, k)
+	if prevented+passed+unknown > 0 {
+		totalExec := prevented + passed + unknown
+		pctPrev := float64(prevented) / float64(totalExec) * 100
+		pctPass := float64(passed) / float64(totalExec) * 100
+		pctUnk := float64(unknown) / float64(totalExec) * 100
+		if unknown > 0 {
+			fmt.Printf("Bypass    : %d prevented (%.1f%%) / %d passed (%.1f%%) / %d unknown (%.1f%%)\n", prevented, pctPrev, passed, pctPass, unknown, pctUnk)
+		} else {
+			fmt.Printf("Bypass    : %d prevented (%.1f%%) / %d passed (%.1f%%)\n", prevented, pctPrev, passed, pctPass)
 		}
-		sort.Ints(sortedKeys)
-		for _, k := range sortedKeys {
-			parts = append(parts, fmt.Sprintf("%d:%d", k, statusCodes[k]))
-		}
-		fmt.Printf("%s\n", strings.Join(parts, ", "))
+	}
+	if len(statusCodesComplete) > 0 {
+		fmt.Printf("Stats (Complete)   : %s\n", formatStatusCodes(statusCodesComplete))
+	}
+	if len(statusCodesIncomplete) > 0 {
+		fmt.Printf("Stats (Incomplete) : %s\n", formatStatusCodes(statusCodesIncomplete))
 	}
 	fmt.Printf("%s\n", sep)
 }
@@ -191,32 +226,43 @@ func openCSV(path string) (*os.File, *csv.Writer, error) {
 		return nil, nil, err
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "completed", "status_codes"})
+	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "completed", "bypass_status", "status_codes"})
 	return f, w, nil
 }
 
 // collectTemplates returns a list of .yaml template paths.
 // If path points to a file it returns that file; if it points to a directory
 // it walks the entire tree and collects every .yaml / .yml file.
-func collectTemplates(path string) ([]string, error) {
-	info, err := os.Stat(path)
+// If cveFilter is provided, it only descends into direct subdirectories
+// that match the allowed years/folders.
+func collectTemplates(basePath, cveFilter string) ([]string, error) {
+	info, err := os.Stat(basePath)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return []string{path}, nil
+		return []string{basePath}, nil
 	}
 
+	allowed := parseCVEFilter(cveFilter)
+	cleanBasePath := filepath.Clean(basePath)
 	var templates []string
-	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+
+	err = filepath.WalkDir(basePath, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() {
-			ext := strings.ToLower(filepath.Ext(p))
-			if ext == ".yaml" || ext == ".yml" {
-				templates = append(templates, p)
+		if d.IsDir() {
+			if len(allowed) > 0 && p != cleanBasePath && filepath.Dir(p) == cleanBasePath {
+				if !allowed[d.Name()] {
+					return fs.SkipDir
+				}
 			}
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext == ".yaml" || ext == ".yml" {
+			templates = append(templates, p)
 		}
 		return nil
 	})
@@ -238,4 +284,33 @@ func formatStatusCodes(codes map[int]int) string {
 		parts = append(parts, fmt.Sprintf("%d:%d", k, codes[k]))
 	}
 	return strings.Join(parts, ",")
+}
+
+func parseCVEFilter(filter string) map[string]bool {
+	allowed := make(map[string]bool)
+	if filter == "" {
+		return allowed
+	}
+	parts := strings.Split(filter, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if strings.Contains(p, "-") {
+			bounds := strings.SplitN(p, "-", 2)
+			if len(bounds) == 2 {
+				start, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+				end, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+				if err1 == nil && err2 == nil && start <= end {
+					for i := start; i <= end; i++ {
+						allowed[strconv.Itoa(i)] = true
+					}
+					continue
+				}
+			}
+		}
+		// If not a range or range failed to parse, add exactly as literal
+		if p != "" {
+			allowed[p] = true
+		}
+	}
+	return allowed
 }

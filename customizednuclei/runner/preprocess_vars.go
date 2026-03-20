@@ -343,6 +343,13 @@ func collectDefinedVars(doc map[string]interface{}) map[string]bool {
 				defined[name] = true
 			}
 		}
+		// Extract payloads: any key in payloads block is a defined variable.
+		// Ex: `payloads: padding: citrix_paddings.txt` defines `padding`.
+		if payloads, ok := m["payloads"].(map[string]interface{}); ok {
+			for k := range payloads {
+				defined[k] = true
+			}
+		}
 	}
 	return defined
 }

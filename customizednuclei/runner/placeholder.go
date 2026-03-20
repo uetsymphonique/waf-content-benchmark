@@ -175,6 +175,10 @@ func fromName(nameLower, nameOrig string) string {
 	case contains("path") && !contains("xpath"):
 		return "/tmp/placeholder"
 
+	// File extensions often concatenated directly to BaseURL without a slash
+	case nameLower == "js" || nameLower == "css" || nameLower == "html" || nameLower == "php" || nameLower == "jsp" || nameLower == "aspx":
+		return "/placeholder." + nameLower
+
 	// URL / redirect destinations
 	case contains("url", "redirect", "endpoint", "node_url"):
 		return "/dashboard"
