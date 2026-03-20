@@ -4,3 +4,6 @@
 [submodule "nuclei-templates"]
 	path = nuclei-templates
 	url = https://github.com/projectdiscovery/nuclei-templates.git
+[submodule "nuclei-docs"]
+	path = nuclei-docs
+	url = https://github.com/projectdiscovery/nuclei-docs.git
