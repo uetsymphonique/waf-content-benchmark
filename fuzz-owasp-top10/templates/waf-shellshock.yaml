@@ -1,0 +1,32 @@
+id: waf-shellshock-testing
+info:
+  name: WAF Efficacy Testing - Shellshock (CVE-2014-6271)
+  author: your-name
+  severity: info
+  description: Testing WAF against Bash environmental variable injection (Shellshock). Targets commonly passed CGI headers.
+  tags: waf-test, shellshock, bash, cgi, fuzzing
+
+variables:
+  payload_list: ../payloads/shellshock.txt
+
+http:
+  - raw:
+      - |+
+        GET /cgi-bin/test.cgi HTTP/1.1
+        Host: {{Hostname}}
+        User-Agent: {{payloads}}
+        Referer: {{payloads}}
+        Accept-Language: {{payloads}}
+        Cookie: session={{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"

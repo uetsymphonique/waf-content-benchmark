@@ -1,0 +1,43 @@
+id: waf-xss-quick-polyglots-testing
+info:
+  name: WAF Efficacy Testing - XSS (Quick & Polyglots)
+  author: your-name
+  severity: info
+  description: Testing WAF against high-impact, context-breaking XSS Polyglots and quick validation payloads.
+  tags: waf-test, xss, polyglot, fuzzing
+
+variables:
+  payload_list: ../payloads/xss_quick_polyglots.txt
+
+http:
+  - raw:
+      - |+
+        GET /search?q={{payloads}} HTTP/1.1
+        Host: {{Hostname}}
+        Accept: text/html
+
+      - |+
+        POST /contact HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+        
+        name=guest&message={{payloads}}
+
+      - |+
+        GET / HTTP/1.1
+        Host: {{Hostname}}
+        User-Agent: {{payloads}}
+        Referer: {{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"

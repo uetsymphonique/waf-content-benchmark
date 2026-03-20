@@ -1,0 +1,47 @@
+id: waf-ldap-testing
+info:
+  name: WAF Efficacy Testing - LDAP Injection
+  author: your-name
+  severity: info
+  description: Testing WAF resilience against LDAP injection syntax and malicious blind fuzzing structures.
+  tags: waf-test, ldap, fuzzing
+
+variables:
+  payload_list: ../payloads/ldap_fuzz.txt
+  attribute_list: ../payloads/ldap_attributes.txt
+
+http:
+  - raw:
+      - |+
+        GET /directory?uid={{payloads}} HTTP/1.1
+        Host: {{Hostname}}
+        Accept: */*
+
+      - |+
+        POST /login HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+        
+        user={{payloads}}&password=admin
+
+      - |+
+        POST /search HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/json
+        
+        {"filter": "{{attributes}}=*"}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+      attributes:
+        - "{{attribute_list}}"
+
+    attack: batteringram
+
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"

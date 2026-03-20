@@ -1,0 +1,41 @@
+id: waf-crlf-testing
+info:
+  name: WAF Efficacy Testing - CRLF Injection (HTTP Response Splitting)
+  author: your-name
+  severity: info
+  description: Testing WAF resilience against CRLF injection payloads that aim to manipulate HTTP headers or split the response.
+  tags: waf-test, crlf, fuzzing
+
+variables:
+  # Trỏ tới kho đạn CRLF của bạn
+  payload_list: ../payloads/crlf.txt
+
+http:
+  - raw:
+      # Kiểu 1: Fuzzing CRLF trên URL Path (Dạng phổ biến nhất)
+      # Lưu ý: Cú pháp URL Path fuzzing không được WAF check cẩn thận
+      - |+
+        GET /{{payloads}} HTTP/1.1
+        Host: {{Hostname}}
+        Accept: */*
+
+      # Kiểu 2: Fuzzing CRLF trong URL Query parameters
+      - |+
+        GET /?redirect={{payloads}} HTTP/1.1
+        Host: {{Hostname}}
+        Accept: */*
+
+
+    payloads:
+      payloads:
+        - "{{payload_list}}" # Load danh mục crlf_encoded.txt
+
+    attack: batteringram
+
+    # Dummy Matcher: Nhận diện mọi phản hồi để Nuclei Output thành JSON file 
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
