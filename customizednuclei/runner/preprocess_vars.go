@@ -36,6 +36,10 @@ var reDSLSingleArgFunc = regexp.MustCompile(`^\{\{(\w+)\((\w+)\)\}\}$`)
 // reRandBase matches {{rand_base(N)}} with an optional second arg.
 var reRandBase = regexp.MustCompile(`^\{\{rand_base\((\d+)(?:,.*)?\)\}\}$`)
 
+// reHexDecodeVarCtx detects a variable name used as the argument of
+// hex_decode(), e.g. hex_decode(auth) or hex_decode(rawXor).
+var reHexDecodeVarCtx = regexp.MustCompile(`hex_decode\(([a-zA-Z_][a-zA-Z0-9_]*)\)`)
+
 // nucleiBuiltinSet lists lowercase DSL function names and the few lowercase
 // built-in variable names that Nuclei resolves at runtime. They must never be
 // injected as static placeholder values.
@@ -140,6 +144,61 @@ func resolveRandVars(doc map[string]interface{}) {
 				n = 8
 			}
 			vars[k] = randAlpha(n)
+		}
+	}
+}
+
+// fixHexDecodeVarContext scans every raw: request string for variables used as
+// the argument to hex_decode(), and replaces any variable whose value is still
+// an unresolved DSL expression (contains "{{") with a valid lowercase hex
+// string. Without this, calls like {{base64(hex_decode(auth))}} fail with
+// "invalid hex string" at Nuclei's DSL runtime when `auth` holds an unresolvable
+// expression such as {{hmac('sha1', query, secret)}}.
+//
+// A generic 16-byte hex string "41424344454647484950515253545556" (printable
+// ASCII ABCDEFGHIJKLMNOPQRSTUV) is used as the fallback.
+func fixHexDecodeVarContext(doc map[string]interface{}) {
+	httpBlocks, ok := doc["http"].([]interface{})
+	if !ok {
+		return
+	}
+
+	// Collect variable names that appear as hex_decode(varname) argument.
+	hexVars := map[string]bool{}
+	for _, block := range httpBlocks {
+		m, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for _, rawEntry := range toSlice(m["raw"]) {
+			s, ok := rawEntry.(string)
+			if !ok {
+				continue
+			}
+			for _, match := range reHexDecodeVarCtx.FindAllStringSubmatch(s, -1) {
+				hexVars[match[1]] = true
+			}
+		}
+	}
+	if len(hexVars) == 0 {
+		return
+	}
+
+	vars, ok := doc["variables"].(map[string]interface{})
+	if !ok {
+		vars = make(map[string]interface{})
+		doc["variables"] = vars
+	}
+
+	for name := range hexVars {
+		current, exists := vars[name]
+		if !exists {
+			vars[name] = "41424344454647484950515253545556"
+			continue
+		}
+		// If the current value still contains {{ (not yet resolved), upgrade to hex.
+		if s, ok := current.(string); ok && strings.Contains(s, "{{") {
+			vars[name] = "41424344454647484950515253545556"
 		}
 	}
 }
@@ -348,6 +407,19 @@ func injectRawVariablePlaceholders(doc map[string]interface{}) {
 					missing["rawXor"] = true
 				}
 				scanExpressions(s)
+			}
+		}
+		// Scan payloads: block string values. Some templates put {{varname}}
+		// directly inside payload strings (e.g. path payloads like
+		// "/bin/view/XWiki/{{username}}?xpage=xml") — these would be missed by
+		// the raw:/path: scans above.
+		if payloads, ok := m["payloads"].(map[string]interface{}); ok {
+			for _, pv := range payloads {
+				for _, entry := range toSlice(pv) {
+					if s, ok := entry.(string); ok {
+						scanExpressions(s)
+					}
+				}
 			}
 		}
 	}

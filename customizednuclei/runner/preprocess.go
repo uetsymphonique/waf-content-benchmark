@@ -103,6 +103,12 @@ func preprocessTemplate(templatePath string) (*preprocessResult, error) {
 	// complained "No parameter 'marker' found".
 	evaluateSimpleDSLVars(doc)
 
+	// Step 5.5e — upgrade any variable whose value is still an unresolved DSL
+	// expression (e.g. {{hmac(...)}}) but is used inside hex_decode() in a raw
+	// request. Replace with a valid hex fallback so Nuclei's DSL runtime can
+	// decode it without erroring out.
+	fixHexDecodeVarContext(doc)
+
 	// Step 6 — upgrade any existing placeholder that is used inside a
 	// base64_decode() DSL call to a base64-valid string; otherwise Nuclei's
 	// DSL evaluator errors and skips the request.
