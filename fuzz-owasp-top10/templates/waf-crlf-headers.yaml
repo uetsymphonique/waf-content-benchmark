@@ -7,14 +7,10 @@ info:
   tags: waf-test, crlf, fuzzing, headers
 
 variables:
-  # Trỏ tới kho đạn CRLF mặc định (Đã URL Encode)
-  # Chúng ta sẽ dùng Helper Function của Nuclei để tự dịch ngược ra byte Raw lúc gửi
   payload_list: ../payloads/crlf.txt
 
 http:
   - raw:
-      # Kiểu 3: Fuzzing CRLF qua HTTP Headers truyền thống 
-      # (CRLF nhắm vào Referer, User-Agent để đục thủng ghi log)
       - |+
         GET / HTTP/1.1
         Host: {{Hostname}}
@@ -25,11 +21,10 @@ http:
 
     payloads:
       payloads:
-        - "{{payload_list}}" # Load danh mục crlf_encoded.txt
+        - "{{payload_list}}"
 
     attack: batteringram
 
-    # Dummy Matcher: Nhận diện mọi phản hồi để Nuclei Output thành JSON file 
     unsafe: true
     matchers:
       - type: word

