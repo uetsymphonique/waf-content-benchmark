@@ -10,6 +10,9 @@ WCB is a high-performance evaluation system for Web Application Firewall (WAF) c
 - **Dual-Mode Evaluation**:
     - `-mode cve`: Template-centric metrics (Vulnerability-level coverage).
     - `-mode fuzz`: Request-centric metrics (Payload-level efficacy).
+- **Template Filtering**:
+    - `-cve`: Filter top-level folders by CVE year/range (e.g., `2023,2024-2025`).
+    - `-vuln`: Filter templates by filename prefix (e.g., `sqli,xss`).
 - **Traceability**: Automatically injects Template IDs into URI paths (e.g., `/template-id/original-path`) to simplify log analysis and correlation on WAF/Backend systems.
 
 ## Project Structure
@@ -35,6 +38,11 @@ go build -o nuclei-waf.exe ./cmd
 ### 3. Check CVE Coverage (CVE Mode)
 ```bash
 .\nuclei-waf.exe -template ..\nuclei-templates\http\cves -cve 2021-2022 -target http://your-waf.site -mode cve -output cve_test.csv
+```
+
+### 4. Specialized Filtering
+```bash
+.\nuclei-waf.exe -template ..\fuzz-owasp-top10\templates -vuln sqli,xss -target http://your-waf.site -mode fuzz
 ```
 
 ## Output Schema

@@ -9,10 +9,10 @@ import (
 )
 
 // Collect returns a list of .yaml/.yml template paths under basePath.
-// If basePath is a file it is returned directly. When cveFilter is provided
-// (e.g. "2023,2024-2026"), only direct subdirectories whose names match are
-// descended into.
-func Collect(basePath, cveFilter string) ([]string, error) {
+// If basePath is a file it is returned directly.
+// cveFilter: filters top-level subdirectories by name (e.g. "2023").
+// vulnFilter: filters files by filename prefix (e.g. "sqli,xss").
+func Collect(basePath, cveFilter, vulnFilter string) ([]string, error) {
 	fi, err := os.Stat(basePath)
 	if err != nil {
 		return nil, err
@@ -21,7 +21,17 @@ func Collect(basePath, cveFilter string) ([]string, error) {
 		return []string{basePath}, nil
 	}
 
-	allowed := ParseCVEFilter(cveFilter)
+	allowedCVE := ParseCVEFilter(cveFilter)
+	
+	var allowedVuln []string
+	if vulnFilter != "" {
+		for _, p := range strings.Split(vulnFilter, ",") {
+			if s := strings.TrimSpace(p); s != "" {
+				allowedVuln = append(allowedVuln, strings.ToLower(s))
+			}
+		}
+	}
+
 	cleanBase := filepath.Clean(basePath)
 	var paths []string
 
@@ -30,17 +40,36 @@ func Collect(basePath, cveFilter string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
-			if len(allowed) > 0 && p != cleanBase && filepath.Dir(p) == cleanBase {
-				if !allowed[d.Name()] {
+			// CVE filter optimizations: only skip top-level directories
+			if len(allowedCVE) > 0 && p != cleanBase && filepath.Dir(p) == cleanBase {
+				if !allowedCVE[d.Name()] {
 					return fs.SkipDir
 				}
 			}
 			return nil
 		}
+
 		ext := strings.ToLower(filepath.Ext(p))
-		if ext == ".yaml" || ext == ".yml" {
-			paths = append(paths, p)
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
 		}
+
+		// Vuln filter: prefix match on filename (case-insensitive)
+		if len(allowedVuln) > 0 {
+			name := strings.ToLower(strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())))
+			match := false
+			for _, prefix := range allowedVuln {
+				if strings.HasPrefix(name, prefix) {
+					match = true
+					break
+				}
+			}
+			if !match {
+				return nil
+			}
+		}
+
+		paths = append(paths, p)
 		return nil
 	})
 	return paths, err

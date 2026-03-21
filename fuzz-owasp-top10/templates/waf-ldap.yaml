@@ -37,7 +37,7 @@ http:
       attributes:
         - "{{attribute_list}}"
 
-    attack: batteringram
+    attack: clusterbomb
 
     unsafe: true
     matchers:

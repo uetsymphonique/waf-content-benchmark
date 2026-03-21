@@ -23,6 +23,7 @@ func main() {
 	logLevel := flag.String("log-level", "info", "Log level: fatal | silent | error | info | warning | debug | verbose")
 	outputPath := flag.String("output", "results.csv", "CSV output file path")
 	cveFilter := flag.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
+	vulnFilter := flag.String("vuln", "", "Comma-separated list of filename prefixes to filter templates (e.g. sqli,xss)")
 	concurrency := flag.Int("c", 5, "Number of concurrent workers")
 	noPreprocess := flag.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
 	mode := flag.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
@@ -37,7 +38,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	templates, err := tmplcollect.Collect(*templatePath, *cveFilter)
+	templates, err := tmplcollect.Collect(*templatePath, *cveFilter, *vulnFilter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "template discovery error: %v\n", err)
 		os.Exit(1)
