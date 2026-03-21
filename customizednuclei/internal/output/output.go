@@ -16,7 +16,6 @@ type Stats struct {
 	Errored              int
 	IncompleteTemplate   int
 	RequestsDefined      int
-	RequestsFired        int
 	PreventedComplete    int
 	PassedComplete       int
 	PreventedIncomplete  int
@@ -76,7 +75,8 @@ func PrintStats(s *Stats, mode string) {
 			fmt.Fprintf(os.Stderr, "  (%d incomplete)", s.IncompleteTemplate)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\nRequests  : %d defined / %d fired\n\n", s.RequestsDefined, s.RequestsFired)
+	totalFired := int(s.LiveRequestsFired)
+	fmt.Fprintf(os.Stderr, "\nRequests  : %d defined / %d fired\n\n", s.RequestsDefined, totalFired)
 
 	if mode == "cve" {
 		fmt.Fprintf(os.Stderr, "[ CVE / Template Metrics ]\n")
@@ -116,13 +116,13 @@ func PrintStats(s *Stats, mode string) {
 				reqPrevented += n
 			}
 		}
-		reqPassed := s.RequestsFired - reqPrevented - reqErrored
+		reqPassed := totalFired - reqPrevented - reqErrored
 
-		fmt.Fprintf(os.Stderr, "Requests  (Fired)     : %d\n", s.RequestsFired)
-		if s.RequestsFired > 0 {
-			pctPrev := float64(reqPrevented) / float64(s.RequestsFired) * 100
-			pctPass := float64(reqPassed) / float64(s.RequestsFired) * 100
-			pctErr := float64(reqErrored) / float64(s.RequestsFired) * 100
+		fmt.Fprintf(os.Stderr, "Requests  (Fired)     : %d\n", totalFired)
+		if totalFired > 0 {
+			pctPrev := float64(reqPrevented) / float64(totalFired) * 100
+			pctPass := float64(reqPassed) / float64(totalFired) * 100
+			pctErr := float64(reqErrored) / float64(totalFired) * 100
 
 			fmt.Fprintf(os.Stderr, "Payloads  (Prevented) : %d (%.1f%%)\n", reqPrevented, pctPrev)
 			fmt.Fprintf(os.Stderr, "Payloads  (Bypassed)  : %d (%.1f%%)\n", reqPassed, pctPass)

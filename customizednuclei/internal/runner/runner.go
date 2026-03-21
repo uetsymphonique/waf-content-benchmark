@@ -24,8 +24,9 @@ import (
 
 // Runner wraps the Nuclei engine for WAF testing.
 type Runner struct {
-	target string
-	engine *nuclei.NucleiEngine
+	target           string
+	engine           *nuclei.NucleiEngine
+	OnResultCallback func()
 }
 
 // New creates a NucleiEngine (which fully initialises all required internals),
@@ -43,9 +44,7 @@ func New(ctx context.Context, target, logLevel string, payloadConcurrency int, o
 		payloadConcurrency = 1
 	}
 
-	progressClient := &LiveProgressClient{
-		IncrementRequestsCallback: onProgress,
-	}
+	progressClient := &LiveProgressClient{}
 
 	// Always enable request/response dumping so Nuclei generates the log
 	// messages; gologger's level filter decides what actually gets printed:
@@ -89,24 +88,19 @@ func New(ctx context.Context, target, logLevel string, payloadConcurrency int, o
 	engine.Options().DebugResponse = true
 
 	return &Runner{
-		target: target,
-		engine: engine,
+		target:           target,
+		engine:           engine,
+		OnResultCallback: onProgress,
 	}, nil
 }
 
-// LiveProgressClient implements progress.Progress to stream payload events
-type LiveProgressClient struct {
-	IncrementRequestsCallback func()
-}
+// LiveProgressClient implements progress.Progress
+type LiveProgressClient struct{}
 
 func (m *LiveProgressClient) Stop() {}
 func (m *LiveProgressClient) Init(hostCount int64, rulesCount int, requestCount int64) {}
 func (m *LiveProgressClient) AddToTotal(delta int64) {}
-func (m *LiveProgressClient) IncrementRequests() {
-	if m.IncrementRequestsCallback != nil {
-		m.IncrementRequestsCallback()
-	}
-}
+func (m *LiveProgressClient) IncrementRequests() {}
 func (m *LiveProgressClient) SetRequests(count uint64) {}
 func (m *LiveProgressClient) IncrementMatched() {}
 func (m *LiveProgressClient) IncrementErrorsBy(count int64) {}
@@ -203,7 +197,18 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 			statusCodes[code]++
 			requestsFired++
 			mu.Unlock()
+			if r.OnResultCallback != nil {
+				r.OnResultCallback()
+			}
 		}
+	}
+
+	// Use ExecuteWithResults instead of Execute so that our custom OnResult
+	severityStr := tmpl.Info.SeverityHolder.Severity.String()
+
+	execRes := &ExecResult{
+		TemplateID: tmpl.ID,
+		Severity:   severityStr,
 	}
 
 	// Use ExecuteWithResults instead of Execute so that our custom OnResult
@@ -211,20 +216,17 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 	// "false" match-all, e.Results will remain empty, thus preventing the OOM
 	// accumulation in scanCtx.results naturally.
 	resSlice, err := tmpl.Executer.ExecuteWithResults(scanCtx)
+	
+	// Update counts regardless of success/fail
+	execRes.Matched = len(resSlice)
+	execRes.RequestsDefined = tmpl.Executer.Requests()
+	execRes.RequestsFired = requestsFired
+	execRes.StatusCodes = statusCodes
+
 	if err != nil {
-		return nil, fmt.Errorf("execute template %q: %w", tmpl.ID, err)
+		return execRes, fmt.Errorf("execute template %q: %w", tmpl.ID, err)
 	}
 
-	severityStr := tmpl.Info.SeverityHolder.Severity.String()
-
-	execRes := &ExecResult{
-		TemplateID:      tmpl.ID,
-		Severity:        severityStr,
-		Matched:         len(resSlice), // We expect 0 here due to dsl:["false"], but capturing it just in case
-		RequestsDefined: tmpl.Executer.Requests(),
-		RequestsFired:   requestsFired,
-		StatusCodes:     statusCodes,
-	}
 	return execRes, nil
 }
 

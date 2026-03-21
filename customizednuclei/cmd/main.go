@@ -151,28 +151,33 @@ func main() {
 				res, err := r.Execute(ctx, t, !*noPreprocess)
 
 				mu.Lock()
+				if res != nil {
+					stats.RequestsDefined += res.RequestsDefined
+					
+					if res.RequestsFired < res.RequestsDefined {
+						stats.IncompleteTemplate++
+						for code, count := range res.StatusCodes {
+							stats.StatusCodesIncomplete[code] += count
+						}
+					} else {
+						for code, count := range res.StatusCodes {
+							stats.StatusCodesComplete[code] += count
+						}
+					}
+				}
+
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[%s] execute error: %v\n", t, err)
 					stats.Errored++
 					mu.Unlock()
 					continue
 				}
-				if res.Skipped {
-					stats.Skipped++
+				if res == nil || res.Skipped {
+					if res != nil && res.Skipped {
+						stats.Skipped++
+					}
 					mu.Unlock()
 					continue
-				}
-				stats.RequestsDefined += res.RequestsDefined
-				stats.RequestsFired += res.RequestsFired
-				if res.RequestsFired < res.RequestsDefined {
-					stats.IncompleteTemplate++
-					for code, count := range res.StatusCodes {
-						stats.StatusCodesIncomplete[code] += count
-					}
-				} else {
-					for code, count := range res.StatusCodes {
-						stats.StatusCodesComplete[code] += count
-					}
 				}
 				isComplete := res.RequestsFired == res.RequestsDefined
 				isPreventedTemplate := false
