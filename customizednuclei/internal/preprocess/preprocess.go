@@ -151,6 +151,10 @@ func PreprocessTemplate(templatePath string) (*Result, error) {
 	templateDir := filepath.Dir(templatePath)
 	resolvePayloadPaths(doc, templateDir)
 
+	// Step 10.5 — evaluate payload preprocessors to generate custom wordlists
+	// and delete the unknown YAML block to pacify Nuclei engine.
+	processPayloadBlocks(doc)
+
 	// Marshal back to YAML and write to a temp file.
 	modified, err := yaml.Marshal(doc)
 	if err != nil {
