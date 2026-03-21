@@ -42,7 +42,7 @@ func OpenCSV(path string) (*os.File, *csv.Writer, error) {
 		return nil, nil, err
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"template_id", "template_file", "requests_defined", "requests_fired", "prevented_count", "bypassed_count", "errored_count", "status_codes"}) //nolint:errcheck
+	w.Write([]string{"template_id", "template_file", "severity", "requests_defined", "requests_fired", "prevented_count", "bypassed_count", "errored_count", "status_codes"}) //nolint:errcheck
 	return f, w, nil
 }
 

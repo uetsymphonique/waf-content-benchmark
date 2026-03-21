@@ -137,9 +137,9 @@ func parseLogLevel(s string) levels.Level {
 	}
 }
 
-// ExecResult holds per-template execution statistics.
 type ExecResult struct {
 	TemplateID      string
+	Severity        string
 	Matched         int         // number of matched ResultEvents
 	RequestsDefined int         // request blocks declared in the template (Executer.Requests())
 	RequestsFired   int         // actual events received during execution (InternalWrappedEvents)
@@ -215,8 +215,11 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 		return nil, fmt.Errorf("execute template %q: %w", tmpl.ID, err)
 	}
 
+	severityStr := tmpl.Info.SeverityHolder.Severity.String()
+
 	execRes := &ExecResult{
 		TemplateID:      tmpl.ID,
+		Severity:        severityStr,
 		Matched:         len(resSlice), // We expect 0 here due to dsl:["false"], but capturing it just in case
 		RequestsDefined: tmpl.Executer.Requests(),
 		RequestsFired:   requestsFired,

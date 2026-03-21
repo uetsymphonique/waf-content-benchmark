@@ -207,6 +207,7 @@ func main() {
 				csvWriter.Write([]string{ //nolint:errcheck
 					res.TemplateID,
 					t,
+					res.Severity,
 					strconv.Itoa(res.RequestsDefined),
 					strconv.Itoa(res.RequestsFired),
 					strconv.Itoa(reqPrevented),
