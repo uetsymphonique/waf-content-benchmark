@@ -33,11 +33,19 @@ type Runner struct {
 //
 // logLevel controls gologger output: "silent" | "info" (default) | "debug" | "verbose".
 // At "debug" level, Nuclei also dumps raw HTTP request/response via [INF]/[DBG] messages.
-func New(ctx context.Context, target, logLevel string) (*Runner, error) {
+func New(ctx context.Context, target, logLevel string, payloadConcurrency int, onProgress func()) (*Runner, error) {
 	lvl := parseLogLevel(logLevel)
 	gologger.DefaultLogger.SetMaxLevel(lvl)
 
 	ensureIgnoreFile()
+
+	if payloadConcurrency < 1 {
+		payloadConcurrency = 1
+	}
+
+	progressClient := &LiveProgressClient{
+		IncrementRequestsCallback: onProgress,
+	}
 
 	// Always enable request/response dumping so Nuclei generates the log
 	// messages; gologger's level filter decides what actually gets printed:
@@ -46,13 +54,22 @@ func New(ctx context.Context, target, logLevel string) (*Runner, error) {
 	//   verbose → [INF] request + [VER] sent + [DBG] response
 	opts := []nuclei.NucleiSDKOptions{
 		nuclei.UseOutputWriter(testutils.NewMockOutputWriter(false)),
-		nuclei.UseStatsWriter(&testutils.MockProgressClient{}),
+		nuclei.UseStatsWriter(progressClient),
 		nuclei.WithSandboxOptions(true, false),
 		nuclei.DisableUpdateCheck(),
 		nuclei.WithVerbosity(nuclei.VerbosityOptions{
 			Debug:         true,
 			DebugRequest:  true,
 			DebugResponse: true,
+		}),
+		nuclei.WithConcurrency(nuclei.Concurrency{
+			TemplateConcurrency:           25,
+			HostConcurrency:               25,
+			HeadlessHostConcurrency:       10,
+			HeadlessTemplateConcurrency:   10,
+			JavascriptTemplateConcurrency: 25,
+			TemplatePayloadConcurrency:    payloadConcurrency,
+			ProbeConcurrency:              50,
 		}),
 	}
 
@@ -76,6 +93,24 @@ func New(ctx context.Context, target, logLevel string) (*Runner, error) {
 		engine: engine,
 	}, nil
 }
+
+// LiveProgressClient implements progress.Progress to stream payload events
+type LiveProgressClient struct {
+	IncrementRequestsCallback func()
+}
+
+func (m *LiveProgressClient) Stop() {}
+func (m *LiveProgressClient) Init(hostCount int64, rulesCount int, requestCount int64) {}
+func (m *LiveProgressClient) AddToTotal(delta int64) {}
+func (m *LiveProgressClient) IncrementRequests() {
+	if m.IncrementRequestsCallback != nil {
+		m.IncrementRequestsCallback()
+	}
+}
+func (m *LiveProgressClient) SetRequests(count uint64) {}
+func (m *LiveProgressClient) IncrementMatched() {}
+func (m *LiveProgressClient) IncrementErrorsBy(count int64) {}
+func (m *LiveProgressClient) IncrementFailedRequestsBy(count int64) {}
 
 // parseLogLevel maps a level name to the corresponding gologger level constant.
 // Accepted values (matching gologger's own Level.String() output):

@@ -53,6 +53,8 @@ func PreprocessTemplate(templatePath string) (*Result, error) {
 		return nil, fmt.Errorf("parse YAML %q: %w", templatePath, err)
 	}
 
+	templateID, _ := doc["id"].(string)
+
 	// Step 1 — skip if there is no HTTP block.
 	httpRaw, hasHTTP := doc["http"]
 	if !hasHTTP {
@@ -61,6 +63,40 @@ func PreprocessTemplate(templatePath string) (*Result, error) {
 	httpBlocks, ok := httpRaw.([]interface{})
 	if !ok || len(httpBlocks) == 0 {
 		return &Result{Skip: true, Cleanup: nopCleanup}, nil
+	}
+
+	// Step 1.5 — inject template ID into paths to assist WAF log grepping
+	if templateID != "" {
+		for _, block := range httpBlocks {
+			m, ok := block.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			
+			if pathRaw, ok := m["path"].([]interface{}); ok {
+				for i, p := range pathRaw {
+					if s, ok := p.(string); ok {
+						pathRaw[i] = injectTemplateID(s, templateID)
+					}
+				}
+			}
+
+			if rawReqs, ok := m["raw"].([]interface{}); ok {
+				for i, r := range rawReqs {
+					if s, ok := r.(string); ok {
+						lines := strings.Split(s, "\n")
+						if len(lines) > 0 {
+							parts := strings.Split(lines[0], " ")
+							if len(parts) >= 3 { // e.g., POST /foo HTTP/1.1
+								parts[1] = injectTemplateID(parts[1], templateID)
+								lines[0] = strings.Join(parts, " ")
+								rawReqs[i] = strings.Join(lines, "\n")
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Step 2 — remove flow directive.
@@ -177,4 +213,28 @@ func PreprocessTemplate(templatePath string) (*Result, error) {
 		Path:    name,
 		Cleanup: func() { os.Remove(name) },
 	}, nil
+}
+
+// injectTemplateID injects the template ID right after the base/root URL or 
+// prepends it to relative paths to make WAF logs highly greppable.
+func injectTemplateID(path string, templateID string) string {
+	if strings.HasPrefix(path, "{{BaseURL}}/") {
+		return strings.Replace(path, "{{BaseURL}}/", fmt.Sprintf("{{BaseURL}}/%s/", templateID), 1)
+	}
+	if strings.HasPrefix(path, "{{RootURL}}/") {
+		return strings.Replace(path, "{{RootURL}}/", fmt.Sprintf("{{RootURL}}/%s/", templateID), 1)
+	}
+
+	if strings.HasPrefix(path, "{{BaseURL}}") {
+		return strings.Replace(path, "{{BaseURL}}", fmt.Sprintf("{{BaseURL}}/%s", templateID), 1)
+	}
+	if strings.HasPrefix(path, "{{RootURL}}") {
+		return strings.Replace(path, "{{RootURL}}", fmt.Sprintf("{{RootURL}}/%s", templateID), 1)
+	}
+
+	if strings.HasPrefix(path, "/") {
+		return fmt.Sprintf("/%s%s", templateID, path)
+	}
+
+	return fmt.Sprintf("/%s/%s", templateID, path)
 }

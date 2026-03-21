@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ func main() {
 	cveFilter := flag.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
 	concurrency := flag.Int("c", 5, "Number of concurrent workers")
 	noPreprocess := flag.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
+	mode := flag.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
 	flag.Parse()
 
 	if *templatePath == "" || *target == "" {
@@ -63,6 +65,11 @@ func main() {
 		nWorkers = len(templates)
 	}
 
+	payloadConcurrency := *concurrency / nWorkers
+	if payloadConcurrency < 1 {
+		payloadConcurrency = 1
+	}
+
 	// Distribute template paths via a buffered job channel.
 	jobs := make(chan string, len(templates))
 	for _, t := range templates {
@@ -79,16 +86,17 @@ func main() {
 		rowsWritten := stats.RowsWritten
 		skippedErr := stats.Skipped + stats.Errored
 		completed := rowsWritten + skippedErr
-		reqs := stats.RequestsFired
 		mu.Unlock()
+
+		reqs := atomic.LoadUint64(&stats.LiveRequestsFired)
 
 		elapsed := time.Since(startTime)
 		speed := 0.0
 		if elapsed.Seconds() > 0 {
 			speed = float64(reqs) / elapsed.Seconds()
 		}
-		msg := fmt.Sprintf("[Workers: %d] Processed: %d/%d (Run: %d, Skip/Err: %d) | Requests Fired: %d | Speed: %.0f req/s | Elapsed: %s",
-			nWorkers, completed, stats.Total, rowsWritten, skippedErr, reqs, speed, elapsed.Round(time.Second))
+		msg := fmt.Sprintf("[Workers: %d, PayloadThreads: %d] Processed: %d/%d (Run: %d, Skip/Err: %d) | Requests Fired: %d | Speed: %.0f req/s | Elapsed: %s",
+			nWorkers, payloadConcurrency, completed, stats.Total, rowsWritten, skippedErr, reqs, speed, elapsed.Round(time.Second))
 		// Print with padded spaces to clear trailing characters
 		fmt.Printf("\r%-110s", msg)
 	}
@@ -121,7 +129,9 @@ func main() {
 			defer wg.Done()
 
 			// Each goroutine owns its own NucleiEngine — no shared engine state.
-			r, err := runner.New(ctx, *target, *logLevel)
+			r, err := runner.New(ctx, *target, *logLevel, payloadConcurrency, func() {
+				atomic.AddUint64(&stats.LiveRequestsFired, 1)
+			})
 			if err != nil {
 				mu.Lock()
 				fmt.Fprintf(os.Stderr, "worker init error: %v\n", err)
@@ -165,29 +175,31 @@ func main() {
 					}
 				}
 				isComplete := res.RequestsFired == res.RequestsDefined
-				isPrevented := false
-				for code := range res.StatusCodes {
+				isPreventedTemplate := false
+				
+				reqPrevented := 0
+				reqErrored := 0
+				for code, count := range res.StatusCodes {
 					if code >= 400 && code < 500 {
-						isPrevented = true
-						break
+						reqPrevented += count
+						isPreventedTemplate = true
+					}
+					if code == 0 {
+						reqErrored += count
 					}
 				}
+				reqBypassed := res.RequestsFired - reqPrevented - reqErrored
 
-				var bypassStatus string
 				if isComplete {
-					if isPrevented {
-						bypassStatus = "prevented"
+					if isPreventedTemplate {
 						stats.PreventedComplete++
 					} else {
-						bypassStatus = "pass"
 						stats.PassedComplete++
 					}
 				} else {
-					if isPrevented {
-						bypassStatus = "prevented"
+					if isPreventedTemplate {
 						stats.PreventedIncomplete++
 					} else {
-						bypassStatus = "unknown"
 						stats.UnknownIncomplete++
 					}
 				}
@@ -197,8 +209,9 @@ func main() {
 					t,
 					strconv.Itoa(res.RequestsDefined),
 					strconv.Itoa(res.RequestsFired),
-					strconv.FormatBool(isComplete),
-					bypassStatus,
+					strconv.Itoa(reqPrevented),
+					strconv.Itoa(reqBypassed),
+					strconv.Itoa(reqErrored),
 					output.FormatStatusCodes(res.StatusCodes),
 				})
 				stats.RowsWritten++
@@ -212,5 +225,5 @@ func main() {
 
 	wg.Wait()
 	printProgress()
-	output.PrintStats(stats)
+	output.PrintStats(stats, *mode)
 }

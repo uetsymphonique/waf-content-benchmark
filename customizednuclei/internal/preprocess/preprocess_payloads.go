@@ -37,21 +37,34 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 				case string:
 					payloadsMap[k] = expandVarString(sv, varsMap)
 				case []interface{}:
-					// Nuclei load.go only loads files if the node is a plain string.
-					// If it's a list, it treats the entries as literal payloads.
-					// Since OWASP templates often wrap the file reference in a list: `- "{{payload_list}}"`,
-					// we flatten it down to a string if there's only one element,
-					// or we'll merge them in Phase 2.
-					var expanded []string
+					var allExpanded []interface{}
+					var isFile bool
+
 					for _, elem := range sv {
 						if strElem, ok := elem.(string); ok {
-							expanded = append(expanded, expandVarString(strElem, varsMap))
+							exp := expandVarString(strElem, varsMap)
+							allExpanded = append(allExpanded, exp)
+							// If any element checks out as a real file path, we tag this payload chunk as a file list.
+							if _, err := os.Stat(exp); err == nil {
+								isFile = true
+							}
+						} else {
+							allExpanded = append(allExpanded, elem)
 						}
 					}
-					if len(expanded) == 1 {
-						payloadsMap[k] = expanded[0]
-					} else if len(expanded) > 1 {
-						payloadsMap[k] = expanded
+					
+					if isFile {
+						if len(allExpanded) == 1 {
+							if str, ok := allExpanded[0].(string); ok {
+								payloadsMap[k] = str
+							}
+						} else {
+							// For multiple files, let Phase 2 or the fallback block merge them
+							payloadsMap[k] = allExpanded
+						}
+					} else {
+						// Ensure variables inside literal strings are still expanded!
+						payloadsMap[k] = allExpanded
 					}
 				}
 			}
@@ -60,13 +73,24 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 		// --- PHASE 2: EVALUATE CUSTOM PREPROCESSORS ---
 		preprocessorsVal, exists := block["preprocessors"]
 		if !exists {
-			// Even if there are no preprocessors, if Phase 1 left a []string,
-			// we MUST merge them into a single string file so Nuclei's loader works!
+			// Even if there are no preprocessors, if Phase 1 left a []interface{} that contains files,
+			// merge them into a single string file so Nuclei's loader works!
 			for k, v := range payloadsMap {
-				if list, ok := v.([]string); ok {
-					mergedFile, err := mergePayloadFiles(list)
-					if err == nil {
-						payloadsMap[k] = mergedFile
+				if list, ok := v.([]interface{}); ok {
+					var strFiles []string
+					hasFile := false
+					for _, elem := range list {
+						if str, ok := elem.(string); ok {
+							strFiles = append(strFiles, str)
+							if _, err := os.Stat(str); err == nil {
+								hasFile = true
+							}
+						}
+					}
+					if hasFile {
+						if mergedFile, err := mergePayloadFiles(strFiles); err == nil {
+							payloadsMap[k] = mergedFile
+						}
 					}
 				}
 			}
@@ -128,8 +152,6 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 				switch v := val.(type) {
 				case string:
 					sourceFiles = append(sourceFiles, v)
-				case []string:
-					sourceFiles = append(sourceFiles, v...)
 				case []interface{}:
 					for _, item := range v {
 						if strItem, ok := item.(string); ok {
@@ -148,11 +170,12 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 				}
 
 				writer := bufio.NewWriter(tmpFile)
+				linesWritten := 0
 
 				for _, sourceFile := range sourceFiles {
 					f, err := os.Open(sourceFile)
 					if err != nil {
-						fmt.Printf("[Warning] preprocessor: could not open payload file %s: %v\n", sourceFile, err)
+						// Don't warn for literal payloads that masquerade as sourceFiles in schema mismatches
 						continue
 					}
 
@@ -168,6 +191,7 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 							if result != line || rule.Search == "{{"+varName+"}}" {
 								writer.WriteString(result)
 								writer.WriteString("\n")
+								linesWritten++
 							}
 						}
 					}
@@ -177,8 +201,12 @@ func processPayloadBlocks(doc map[string]interface{}) error {
 				tmpFilePath, _ := filepath.Abs(tmpFile.Name())
 				tmpFile.Close()
 
-				// Assign as a STRING, so Nuclei's native loadPayloads(string) kicks in!
-				payloadsMap[varName] = tmpFilePath
+				// Only overwrite the payload key if we actually generated real lines from existing files
+				if linesWritten > 0 {
+					payloadsMap[varName] = tmpFilePath
+				} else {
+					os.Remove(tmpFilePath)
+				}
 			}
 		}
 
