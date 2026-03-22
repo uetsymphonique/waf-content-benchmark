@@ -26,7 +26,7 @@ import (
 type Runner struct {
 	target           string
 	engine           *nuclei.NucleiEngine
-	OnResultCallback func()
+	OnResultCallback func(statusCode int, rawRequest string)
 }
 
 // New creates a NucleiEngine (which fully initialises all required internals),
@@ -34,7 +34,7 @@ type Runner struct {
 //
 // logLevel controls gologger output: "silent" | "info" (default) | "debug" | "verbose".
 // At "debug" level, Nuclei also dumps raw HTTP request/response via [INF]/[DBG] messages.
-func New(ctx context.Context, target, logLevel string, payloadConcurrency int, onProgress func()) (*Runner, error) {
+func New(ctx context.Context, target, logLevel string, payloadConcurrency int, onResult func(statusCode int, rawRequest string)) (*Runner, error) {
 	lvl := parseLogLevel(logLevel)
 	gologger.DefaultLogger.SetMaxLevel(lvl)
 
@@ -90,7 +90,7 @@ func New(ctx context.Context, target, logLevel string, payloadConcurrency int, o
 	return &Runner{
 		target:           target,
 		engine:           engine,
-		OnResultCallback: onProgress,
+		OnResultCallback: onResult,
 	}, nil
 }
 
@@ -198,7 +198,11 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 			requestsFired++
 			mu.Unlock()
 			if r.OnResultCallback != nil {
-				r.OnResultCallback()
+				var rawReq string
+				if len(e.Results) > 0 && e.Results[0] != nil {
+					rawReq = e.Results[0].Request
+				}
+				r.OnResultCallback(code, rawReq)
 			}
 		}
 	}

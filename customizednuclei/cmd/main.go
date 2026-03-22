@@ -11,11 +11,53 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"strings"
 
 	"customizednuclei/internal/output"
 	"customizednuclei/internal/runner"
 	tmplcollect "customizednuclei/internal/template"
 )
+
+type StatusFilter struct {
+	exact    map[int]bool
+	prefixes []string
+}
+
+func ParseStatusFilter(s string) *StatusFilter {
+	if s == "" {
+		return nil
+	}
+	f := &StatusFilter{exact: make(map[int]bool)}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		partLower := strings.ToLower(part)
+		if strings.Contains(partLower, "*") || strings.Contains(partLower, "x") {
+			prefix := strings.ReplaceAll(strings.ReplaceAll(partLower, "*", ""), "x", "")
+			f.prefixes = append(f.prefixes, prefix)
+		} else {
+			if code, err := strconv.Atoi(part); err == nil {
+				f.exact[code] = true
+			}
+		}
+	}
+	return f
+}
+
+func (f *StatusFilter) Matches(code int) bool {
+	if f.exact[code] {
+		return true
+	}
+	codeStr := strconv.Itoa(code)
+	for _, p := range f.prefixes {
+		if strings.HasPrefix(codeStr, p) {
+			return true
+		}
+	}
+	return false
+}
 
 func main() {
 	templatePath := flag.String("template", "", "Path to a nuclei template (.yaml) or a directory of templates")
@@ -27,6 +69,8 @@ func main() {
 	concurrency := flag.Int("c", 5, "Number of concurrent workers")
 	noPreprocess := flag.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
 	mode := flag.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
+	dumpStatusFilter := flag.String("dump-status", "", "Comma-separated list of status codes to dump raw requests for (e.g. 200,20*,4**)")
+	dumpFilePath := flag.String("dump-file", "dumped_requests.log", "File to write dumped requests to")
 	flag.Parse()
 
 	if *templatePath == "" || *target == "" {
@@ -55,6 +99,19 @@ func main() {
 	}()
 
 	var mu sync.Mutex
+	var dumpMu sync.Mutex
+	var dumpWriter *os.File
+	filter := ParseStatusFilter(*dumpStatusFilter)
+	if filter != nil {
+		f, err := os.OpenFile(*dumpFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open dump file: %v\n", err)
+			os.Exit(1)
+		}
+		dumpWriter = f
+		defer dumpWriter.Close()
+	}
+
 	stats := output.NewStats(len(templates))
 
 	if len(templates) == 0 {
@@ -147,8 +204,13 @@ func main() {
 			defer wg.Done()
 
 			// Each goroutine owns its own NucleiEngine — no shared engine state.
-			r, err := runner.New(ctx, *target, *logLevel, payloadConcurrency, func() {
+			r, err := runner.New(ctx, *target, *logLevel, payloadConcurrency, func(statusCode int, rawRequest string) {
 				atomic.AddUint64(&stats.LiveRequestsFired, 1)
+				if filter != nil && filter.Matches(statusCode) && rawRequest != "" {
+					dumpMu.Lock()
+					fmt.Fprintf(dumpWriter, "========== [Status: %d] ==========\n%s\n\n", statusCode, rawRequest)
+					dumpMu.Unlock()
+				}
 			})
 			if err != nil {
 				mu.Lock()

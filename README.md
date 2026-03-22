@@ -10,10 +10,10 @@ WCB is a high-performance evaluation system for Web Application Firewall (WAF) c
 - **Dual-Mode Evaluation**:
     - `-mode cve`: Template-centric metrics (Vulnerability-level coverage).
     - `-mode fuzz`: Request-centric metrics (Payload-level efficacy).
-- **Template Filtering**:
+- **Filtering & Exporting**:
     - `-cve`: Filter top-level folders by CVE year/range (e.g., `2023,2024-2025`).
     - `-vuln`: Filter templates by filename prefix (e.g., `sqli,xss`).
-- **Traceability**: Automatically injects Template IDs into URI paths (e.g., `/template-id/original-path`) to simplify log analysis and correlation on WAF/Backend systems.
+    - `-dump-status`: Export raw HTTP requests matching specific status codes or wildcards (e.g., `200,20*,4**`) to a file for bypass analysis.
 
 ## Project Structure
 
