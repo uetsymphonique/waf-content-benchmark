@@ -57,18 +57,35 @@ func main() {
 	var mu sync.Mutex
 	stats := output.NewStats(len(templates))
 
-	// Clamp concurrency to [1, len(templates)].
-	nWorkers := *concurrency
-	if nWorkers < 1 {
-		nWorkers = 1
-	}
-	if nWorkers > len(templates) {
-		nWorkers = len(templates)
+	if len(templates) == 0 {
+		fmt.Fprintln(os.Stderr, "No templates found matching the criteria")
+		os.Exit(1)
 	}
 
-	payloadConcurrency := *concurrency / nWorkers
-	if payloadConcurrency < 1 {
-		payloadConcurrency = 1
+	var nWorkers, payloadConcurrency int
+	if *mode == "fuzz" {
+		// Fuzzing Mode: Templates are 'fat' (contain thousands of payloads).
+		// Processing them sequentially (1 worker) with ALL concurrency allocated to payload threads
+		// prevents starvation where short templates finish and leave long templates stuck at low concurrency.
+		nWorkers = 1
+		payloadConcurrency = *concurrency
+		if payloadConcurrency < 1 {
+			payloadConcurrency = 1
+		}
+	} else {
+		// CVE Mode: Templates are 'thin' (contain 1 payload).
+		// Maximise parallel workers to process multiple templates simultaneously.
+		nWorkers = *concurrency
+		if nWorkers < 1 {
+			nWorkers = 1
+		}
+		if nWorkers > len(templates) {
+			nWorkers = len(templates)
+		}
+		payloadConcurrency = *concurrency / nWorkers
+		if payloadConcurrency < 1 {
+			payloadConcurrency = 1
+		}
 	}
 
 	// Distribute template paths via a buffered job channel.
