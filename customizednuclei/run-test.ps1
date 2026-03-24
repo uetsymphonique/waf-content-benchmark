@@ -4,7 +4,7 @@ param(
     [int]$workers = 15,
     [ValidateSet("both", "cve", "fuzz")]
     [string]$run_mode = "both",
-    [string]$trace_layer = "X-Trace-Layer:*"
+    [string]$trace_headers = "X-Trace-Layer:*"
 )
 
 if ($run_mode -eq "both" -or $run_mode -eq "cve") {
@@ -15,7 +15,7 @@ if ($run_mode -eq "both" -or $run_mode -eq "cve") {
         -log-level error `
         -c $workers `
         -mode cve `
-        -trace-headers $trace_layer
+        -trace-headers $trace_headers
 }
 
 if ($run_mode -eq "both" -or $run_mode -eq "fuzz") {
@@ -26,5 +26,5 @@ if ($run_mode -eq "both" -or $run_mode -eq "fuzz") {
         -log-level error `
         -c $workers `
         -mode fuzz `
-        -trace-headers $trace_layer
+        -trace-headers $trace_headers
 }

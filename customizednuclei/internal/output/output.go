@@ -10,19 +10,19 @@ import (
 
 // Stats holds accumulated benchmark statistics across all templates.
 type Stats struct {
-	LiveRequestsFired    uint64 // Lock-free atomic counter for streaming progress metrics
-	Total                int
-	Skipped              int
-	Errored              int
-	IncompleteTemplate   int
-	RequestsDefined      int
-	PreventedComplete    int
-	PassedComplete       int
-	PreventedIncomplete  int
-	UnknownIncomplete    int
+	LiveRequestsFired     uint64 // Lock-free atomic counter for streaming progress metrics
+	Total                 int
+	Skipped               int
+	Errored               int
+	IncompleteTemplate    int
+	RequestsDefined       int
+	PreventedComplete     int
+	PassedComplete        int
+	PreventedIncomplete   int
+	UnknownIncomplete     int
 	StatusCodesComplete   map[int]int
 	StatusCodesIncomplete map[int]int
-	RowsWritten          int
+	RowsWritten           int
 }
 
 // NewStats creates a zeroed Stats with initialised maps.
@@ -35,13 +35,17 @@ func NewStats(total int) *Stats {
 }
 
 // OpenCSV creates (or truncates) a CSV file and writes the header row.
-func OpenCSV(path string) (*os.File, *csv.Writer, error) {
+func OpenCSV(path string, includeTraceStats bool) (*os.File, *csv.Writer, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	w := csv.NewWriter(f)
-	w.Write([]string{"template_id", "template_file", "severity", "requests_defined", "requests_fired", "prevented_count", "bypassed_count", "errored_count", "status_codes"}) //nolint:errcheck
+	header := []string{"template_id", "template_file", "severity", "requests_defined", "requests_fired", "prevented_count", "bypassed_count", "errored_count", "status_codes"}
+	if includeTraceStats {
+		header = append(header, "trace_headers", "trace_matched_count", "trace_unmatched_count")
+	}
+	w.Write(header) //nolint:errcheck
 	return f, w, nil
 }
 
@@ -67,7 +71,7 @@ func PrintStats(s *Stats, mode string) {
 	sep := strings.Repeat("─", 60)
 	fmt.Fprintf(os.Stderr, "\n%s\n", sep)
 	fmt.Fprintf(os.Stderr, "Templates : %d total", s.Total)
-	
+
 	totalSkippedErr := s.Skipped + s.Errored
 	if totalSkippedErr > 0 || s.IncompleteTemplate > 0 {
 		fmt.Fprintf(os.Stderr, "  (%d skipped/err)", totalSkippedErr)
@@ -106,8 +110,12 @@ func PrintStats(s *Stats, mode string) {
 	} else if mode == "fuzz" {
 		fmt.Fprintf(os.Stderr, "[ Fuzz / Request Metrics ]\n")
 		totalCodes := make(map[int]int)
-		for c, n := range s.StatusCodesComplete { totalCodes[c] += n }
-		for c, n := range s.StatusCodesIncomplete { totalCodes[c] += n }
+		for c, n := range s.StatusCodesComplete {
+			totalCodes[c] += n
+		}
+		for c, n := range s.StatusCodesIncomplete {
+			totalCodes[c] += n
+		}
 
 		reqPrevented := 0
 		reqErrored := totalCodes[0]

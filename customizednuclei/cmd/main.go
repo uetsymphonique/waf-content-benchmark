@@ -185,7 +185,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	csvFile, csvWriter, err := output.OpenCSV(*outputPath)
+	includeTraceStats := strings.TrimSpace(*traceHeaders) != ""
+	csvFile, csvWriter, err := output.OpenCSV(*outputPath, includeTraceStats)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open output csv: %v\n", err)
 		os.Exit(1)
@@ -404,6 +405,17 @@ func main() {
 				}
 				isPreventedTemplate := reqPrevented > 0
 				reqBypassed := res.RequestsFired - reqPrevented - reqErrored
+				traceMatchedCount := 0
+				for _, matched := range res.TraceMatchedStatusCodes {
+					if matched > 0 {
+						traceMatchedCount += matched
+					}
+				}
+				traceCandidateCount := res.RequestsFired - reqErrored
+				if traceMatchedCount > traceCandidateCount {
+					traceMatchedCount = traceCandidateCount
+				}
+				traceUnmatchedCount := traceCandidateCount - traceMatchedCount
 
 				if isComplete {
 					if isPreventedTemplate {
@@ -419,7 +431,7 @@ func main() {
 					}
 				}
 
-				csvWriter.Write([]string{ //nolint:errcheck
+				row := []string{
 					res.TemplateID,
 					t,
 					res.Severity,
@@ -429,7 +441,15 @@ func main() {
 					strconv.Itoa(reqBypassed),
 					strconv.Itoa(reqErrored),
 					output.FormatStatusCodes(res.StatusCodes),
-				})
+				}
+				if includeTraceStats {
+					row = append(row,
+						*traceHeaders,
+						strconv.Itoa(traceMatchedCount),
+						strconv.Itoa(traceUnmatchedCount),
+					)
+				}
+				csvWriter.Write(row) //nolint:errcheck
 				stats.RowsWritten++
 				if stats.RowsWritten%50 == 0 {
 					csvWriter.Flush()
