@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"strings"
 
 	"customizednuclei/internal/output"
 	"customizednuclei/internal/runner"
@@ -21,6 +21,16 @@ import (
 type StatusFilter struct {
 	exact    map[int]bool
 	prefixes []string
+}
+
+type TraceHeaderMatcher struct {
+	header   string
+	value    string
+	anyValue bool
+}
+
+type TraceHeaderFilter struct {
+	matchers []TraceHeaderMatcher
 }
 
 func ParseStatusFilter(s string) *StatusFilter {
@@ -47,6 +57,9 @@ func ParseStatusFilter(s string) *StatusFilter {
 }
 
 func (f *StatusFilter) Matches(code int) bool {
+	if f == nil {
+		return false
+	}
 	if f.exact[code] {
 		return true
 	}
@@ -59,23 +72,107 @@ func (f *StatusFilter) Matches(code int) bool {
 	return false
 }
 
+func ParseTraceHeaderFilter(spec string) *TraceHeaderFilter {
+	if spec == "" {
+		return nil
+	}
+
+	matchers := make([]TraceHeaderMatcher, 0)
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		idx := strings.Index(part, ":")
+		if idx <= 0 || idx == len(part)-1 {
+			continue
+		}
+
+		header := strings.ToLower(strings.TrimSpace(part[:idx]))
+		value := strings.TrimSpace(part[idx+1:])
+		if header == "" || value == "" {
+			continue
+		}
+
+		matchers = append(matchers, TraceHeaderMatcher{
+			header:   header,
+			value:    value,
+			anyValue: value == "*",
+		})
+	}
+
+	if len(matchers) == 0 {
+		return nil
+	}
+
+	return &TraceHeaderFilter{matchers: matchers}
+}
+
+func (f *TraceHeaderFilter) MatchesInternalEvent(event map[string]interface{}) bool {
+	if f == nil || len(f.matchers) == 0 {
+		return false
+	}
+	if event == nil {
+		return false
+	}
+
+	for _, m := range f.matchers {
+		key := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(m.header), "-", "_"))
+		v, ok := event[key]
+		if !ok {
+			continue
+		}
+
+		if m.anyValue {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", v)), m.value) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func main() {
-	templatePath := flag.String("template", "", "Path to a nuclei template (.yaml) or a directory of templates")
-	target := flag.String("target", "", "Target URL (e.g. https://example.com)")
-	logLevel := flag.String("log-level", "info", "Log level: fatal | silent | error | info | warning | debug | verbose")
-	outputPath := flag.String("output", "results.csv", "CSV output file path")
-	cveFilter := flag.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
-	vulnFilter := flag.String("vuln", "", "Comma-separated list of filename prefixes to filter templates (e.g. sqli,xss)")
-	concurrency := flag.Int("c", 5, "Number of concurrent workers")
-	noPreprocess := flag.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
-	mode := flag.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
-	dumpStatusFilter := flag.String("dump-status", "", "Comma-separated list of status codes to dump raw requests for (e.g. 200,20*,4**)")
-	dumpFilePath := flag.String("dump-file", "dumped_requests.log", "File to write dumped requests to")
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	templatePath := fs.String("template", "", "Path to a nuclei template (.yaml) or a directory of templates")
+	target := fs.String("target", "", "Target URL (e.g. https://example.com)")
+	logLevel := fs.String("log-level", "info", "Log level: fatal | silent | error | info | warning | debug | verbose")
+	outputPath := fs.String("output", "results.csv", "CSV output file path")
+	cveFilter := fs.String("cve", "", "Comma-separated list or ranges of CVE folders (e.g. 2023,2024,2025-2027) to filter subfolders")
+	vulnFilter := fs.String("vuln", "", "Comma-separated list of filename prefixes to filter templates (e.g. sqli,xss)")
+	concurrency := fs.Int("c", 5, "Number of concurrent workers")
+	noPreprocess := fs.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
+	mode := fs.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
+	dumpStatusFilter := fs.String("dump-status", "", "Comma-separated list of status codes to dump raw requests for (e.g. 200,20*,4**)")
+	excludeDumpStatusFilter := fs.String("exclude-dump-status", "", "Comma-separated status patterns excluded from dump-status (e.g. 403,416)")
+	dumpFilePath := fs.String("dump-file", "dumped_requests.log", "File to write dumped requests to")
+	blockedStatus := fs.String("blocked-status", "", "Comma-separated status patterns treated as prevented/blocked (e.g. 403,40*,4**) (layer 1)")
+	excludeBlockedStatus := fs.String("exclude-blocked-status", "", "Comma-separated status patterns excluded from blocked-status (e.g. 400,416)")
+	traceHeaders := fs.String("trace-headers", "", "Comma-separated header:value pairs indicating request passed through proxy/backend (e.g. X-Trace-Proxy:apache,X-Trace-Layer:backend-flask or X-Trace-Proxy:*) (layer 2)")
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			os.Exit(0)
+		}
+		os.Exit(2)
+	}
 
 	if *templatePath == "" || *target == "" {
 		fmt.Fprintln(os.Stderr, "Usage: nuclei-waf -template <path> -target <url>")
-		flag.PrintDefaults()
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+	if *blockedStatus == "" && *traceHeaders == "" {
+		fmt.Fprintln(os.Stderr, "at least one detection layer is required: define -blocked-status and/or -trace-headers")
+		os.Exit(1)
+	}
+	if *blockedStatus == "" && *excludeBlockedStatus != "" {
+		fmt.Fprintln(os.Stderr, "-exclude-blocked-status requires -blocked-status")
 		os.Exit(1)
 	}
 
@@ -101,8 +198,13 @@ func main() {
 	var mu sync.Mutex
 	var dumpMu sync.Mutex
 	var dumpWriter *os.File
-	filter := ParseStatusFilter(*dumpStatusFilter)
-	if filter != nil {
+	dumpFilter := ParseStatusFilter(*dumpStatusFilter)
+	excludeDumpFilter := ParseStatusFilter(*excludeDumpStatusFilter)
+	blockedFilter := ParseStatusFilter(*blockedStatus)
+	excludeBlockedFilter := ParseStatusFilter(*excludeBlockedStatus)
+	traceHeaderFilter := ParseTraceHeaderFilter(*traceHeaders)
+
+	if dumpFilter != nil {
 		f, err := os.OpenFile(*dumpFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to open dump file: %v\n", err)
@@ -186,7 +288,7 @@ func main() {
 				return
 			case <-ticker.C:
 				printProgress()
-				
+
 				mu.Lock()
 				completed := stats.RowsWritten + stats.Skipped + stats.Errored
 				mu.Unlock()
@@ -204,9 +306,9 @@ func main() {
 			defer wg.Done()
 
 			// Each goroutine owns its own NucleiEngine — no shared engine state.
-			r, err := runner.New(ctx, *target, *logLevel, payloadConcurrency, func(statusCode int, rawRequest string) {
+			r, err := runner.New(ctx, *target, *logLevel, payloadConcurrency, traceHeaderFilter.MatchesInternalEvent, func(statusCode int, rawRequest string) {
 				atomic.AddUint64(&stats.LiveRequestsFired, 1)
-				if filter != nil && filter.Matches(statusCode) && rawRequest != "" {
+				if dumpFilter != nil && dumpFilter.Matches(statusCode) && (excludeDumpFilter == nil || !excludeDumpFilter.Matches(statusCode)) && rawRequest != "" {
 					dumpMu.Lock()
 					fmt.Fprintf(dumpWriter, "========== [Status: %d] ==========\n%s\n\n", statusCode, rawRequest)
 					dumpMu.Unlock()
@@ -233,7 +335,7 @@ func main() {
 				mu.Lock()
 				if res != nil {
 					stats.RequestsDefined += res.RequestsDefined
-					
+
 					if res.RequestsFired < res.RequestsDefined {
 						stats.IncompleteTemplate++
 						for code, count := range res.StatusCodes {
@@ -260,19 +362,47 @@ func main() {
 					continue
 				}
 				isComplete := res.RequestsFired == res.RequestsDefined
-				isPreventedTemplate := false
-				
+
 				reqPrevented := 0
 				reqErrored := 0
 				for code, count := range res.StatusCodes {
-					if code >= 400 && code < 500 {
-						reqPrevented += count
-						isPreventedTemplate = true
-					}
 					if code == 0 {
 						reqErrored += count
+						continue
+					}
+
+					tracePassedCount := res.TraceMatchedStatusCodes[code]
+					if tracePassedCount < 0 {
+						tracePassedCount = 0
+					}
+					if tracePassedCount > count {
+						tracePassedCount = count
+					}
+
+					statusLayerEnabled := blockedFilter != nil
+					traceLayerEnabled := traceHeaderFilter != nil
+
+					statusBlockedCount := 0
+					if statusLayerEnabled && blockedFilter.Matches(code) {
+						statusBlockedCount = count
+						if excludeBlockedFilter != nil && excludeBlockedFilter.Matches(code) {
+							statusBlockedCount = 0
+						}
+					}
+
+					switch {
+					case statusLayerEnabled && traceLayerEnabled:
+						blockedCount := statusBlockedCount - tracePassedCount
+						if blockedCount > 0 {
+							reqPrevented += blockedCount
+						}
+					case statusLayerEnabled:
+						reqPrevented += statusBlockedCount
+					case traceLayerEnabled:
+						reqPrevented += count - tracePassedCount
 					}
 				}
+				isPreventedTemplate := reqPrevented > 0
 				reqBypassed := res.RequestsFired - reqPrevented - reqErrored
 
 				if isComplete {

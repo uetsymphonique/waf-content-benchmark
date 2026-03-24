@@ -26,6 +26,7 @@ import (
 type Runner struct {
 	target           string
 	engine           *nuclei.NucleiEngine
+	TraceHeaderMatch func(map[string]interface{}) bool
 	OnResultCallback func(statusCode int, rawRequest string)
 }
 
@@ -34,7 +35,7 @@ type Runner struct {
 //
 // logLevel controls gologger output: "silent" | "info" (default) | "debug" | "verbose".
 // At "debug" level, Nuclei also dumps raw HTTP request/response via [INF]/[DBG] messages.
-func New(ctx context.Context, target, logLevel string, payloadConcurrency int, onResult func(statusCode int, rawRequest string)) (*Runner, error) {
+func New(ctx context.Context, target, logLevel string, payloadConcurrency int, traceHeaderMatch func(map[string]interface{}) bool, onResult func(statusCode int, rawRequest string)) (*Runner, error) {
 	lvl := parseLogLevel(logLevel)
 	gologger.DefaultLogger.SetMaxLevel(lvl)
 
@@ -90,6 +91,7 @@ func New(ctx context.Context, target, logLevel string, payloadConcurrency int, o
 	return &Runner{
 		target:           target,
 		engine:           engine,
+		TraceHeaderMatch: traceHeaderMatch,
 		OnResultCallback: onResult,
 	}, nil
 }
@@ -97,14 +99,14 @@ func New(ctx context.Context, target, logLevel string, payloadConcurrency int, o
 // LiveProgressClient implements progress.Progress
 type LiveProgressClient struct{}
 
-func (m *LiveProgressClient) Stop() {}
+func (m *LiveProgressClient) Stop()                                                    {}
 func (m *LiveProgressClient) Init(hostCount int64, rulesCount int, requestCount int64) {}
-func (m *LiveProgressClient) AddToTotal(delta int64) {}
-func (m *LiveProgressClient) IncrementRequests() {}
-func (m *LiveProgressClient) SetRequests(count uint64) {}
-func (m *LiveProgressClient) IncrementMatched() {}
-func (m *LiveProgressClient) IncrementErrorsBy(count int64) {}
-func (m *LiveProgressClient) IncrementFailedRequestsBy(count int64) {}
+func (m *LiveProgressClient) AddToTotal(delta int64)                                   {}
+func (m *LiveProgressClient) IncrementRequests()                                       {}
+func (m *LiveProgressClient) SetRequests(count uint64)                                 {}
+func (m *LiveProgressClient) IncrementMatched()                                        {}
+func (m *LiveProgressClient) IncrementErrorsBy(count int64)                            {}
+func (m *LiveProgressClient) IncrementFailedRequestsBy(count int64)                    {}
 
 // parseLogLevel maps a level name to the corresponding gologger level constant.
 // Accepted values (matching gologger's own Level.String() output):
@@ -132,13 +134,14 @@ func parseLogLevel(s string) levels.Level {
 }
 
 type ExecResult struct {
-	TemplateID      string
-	Severity        string
-	Matched         int         // number of matched ResultEvents
-	RequestsDefined int         // request blocks declared in the template (Executer.Requests())
-	RequestsFired   int         // actual events received during execution (InternalWrappedEvents)
-	Skipped         bool        // template parsed as nil (global matcher — nothing to execute)
-	StatusCodes     map[int]int // HTTP status code → count of requests that returned it
+	TemplateID              string
+	Severity                string
+	Matched                 int         // number of matched ResultEvents
+	RequestsDefined         int         // request blocks declared in the template (Executer.Requests())
+	RequestsFired           int         // actual events received during execution (InternalWrappedEvents)
+	Skipped                 bool        // template parsed as nil (global matcher — nothing to execute)
+	StatusCodes             map[int]int // HTTP status code → count of requests that returned it
+	TraceMatchedStatusCodes map[int]int // HTTP status code → count of responses matching trace-header layer
 }
 
 // Execute preprocesses a template (strips flow/matchers, injects catch-all),
@@ -187,14 +190,22 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 	// Stream results: calculate stats on-the-fly without keeping massive arrays in memory.
 	// This prevents Out-Of-Memory (OOM) when fuzzing with millions of payloads.
 	statusCodes := make(map[int]int)
+	traceMatchedStatusCodes := make(map[int]int)
 	var requestsFired int
 	var mu sync.Mutex
 
 	scanCtx.OnResult = func(e *output.InternalWrappedEvent) {
 		if e != nil {
 			code := extractStatusCode(e)
+			traceMatched := false
+			if r.TraceHeaderMatch != nil && e.InternalEvent != nil {
+				traceMatched = r.TraceHeaderMatch(e.InternalEvent)
+			}
 			mu.Lock()
 			statusCodes[code]++
+			if traceMatched {
+				traceMatchedStatusCodes[code]++
+			}
 			requestsFired++
 			mu.Unlock()
 			if r.OnResultCallback != nil {
@@ -220,12 +231,13 @@ func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreproce
 	// "false" match-all, e.Results will remain empty, thus preventing the OOM
 	// accumulation in scanCtx.results naturally.
 	resSlice, err := tmpl.Executer.ExecuteWithResults(scanCtx)
-	
+
 	// Update counts regardless of success/fail
 	execRes.Matched = len(resSlice)
 	execRes.RequestsDefined = tmpl.Executer.Requests()
 	execRes.RequestsFired = requestsFired
 	execRes.StatusCodes = statusCodes
+	execRes.TraceMatchedStatusCodes = traceMatchedStatusCodes
 
 	if err != nil {
 		return execRes, fmt.Errorf("execute template %q: %w", tmpl.ID, err)
@@ -288,4 +300,3 @@ func ensureIgnoreFile() {
 		_ = os.WriteFile(p, []byte("tags: []\nfiles: []\n"), 0o644)
 	}
 }
-
