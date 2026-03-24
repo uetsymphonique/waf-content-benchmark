@@ -10,6 +10,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("X-Trace-Layer", "backend-simple")
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
@@ -18,7 +19,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(body).encode())
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+
+        if length < 0:
+            length = 0
+
         if not length:
             return None, "empty"
 
@@ -35,10 +43,7 @@ class Handler(BaseHTTPRequestHandler):
         # Text
         if any(t in content_type for t in ["text/", "application/xml",
                                              "application/x-www-form-urlencoded"]):
-            try:
-                return raw.decode("utf-8"), "text"
-            except Exception:
-                pass
+            return raw.decode("utf-8", errors="replace"), "text"
 
         if "multipart/form-data" in content_type:
             return {"size_bytes": length, "note": "multipart not decoded"}, "multipart"
@@ -49,44 +54,44 @@ class Handler(BaseHTTPRequestHandler):
         except UnicodeDecodeError:
             return base64.b64encode(raw).decode(), "binary_base64"
 
+    def _normalized_path(self):
+        return self.path.rstrip("?")
+
+    def _handle_request(self, read_body):
+        full_path = self._normalized_path()
+
+        body, body_type = (None, "empty")
+        if read_body:
+            body, body_type = self._read_body()
+
+        response_data = {
+            "status": "ok",
+            "method": self.command,
+            "path": full_path,
+            "body_type": body_type,
+            "body": body,
+        }
+
+        print(f"\n[+] {self.command} {full_path} | Type: {body_type}", flush=True)
+        if body:
+            print(f"Payload: {body}", flush=True)
+
+        self._send(200, response_data)
+
     def do_GET(self):
-        self._send(200, {"status": "ok", "method": "GET", "path": self.path})
+        self._handle_request(read_body=True)
 
     def do_POST(self):
-        body, body_type = self._read_body()
-        self._send(200, {
-            "status": "ok", "method": "POST",
-            "path": self.path,
-            "body_type": body_type,
-            "body": body
-        })
+        self._handle_request(read_body=True)
 
     def do_PUT(self):
-        body, body_type = self._read_body()
-        self._send(200, {
-            "status": "ok", "method": "PUT",
-            "path": self.path,
-            "body_type": body_type,
-            "body": body
-        })
+        self._handle_request(read_body=True)
 
     def do_PATCH(self):
-        body, body_type = self._read_body()
-        self._send(200, {
-            "status": "ok", "method": "PATCH",
-            "path": self.path,
-            "body_type": body_type,
-            "body": body
-        })
+        self._handle_request(read_body=True)
 
     def do_DELETE(self):
-        body, body_type = self._read_body()
-        self._send(200, {
-            "status": "ok", "method": "DELETE",
-            "path": self.path,
-            "body_type": body_type,
-            "body": body
-        })
+        self._handle_request(read_body=True)
 
     def do_OPTIONS(self):
         self._send(204, None)

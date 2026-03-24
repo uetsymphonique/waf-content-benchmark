@@ -70,6 +70,7 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['X-Trace-Layer'] = 'backend-flask'
     return response
 
 if __name__ == '__main__':
