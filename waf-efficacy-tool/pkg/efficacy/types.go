@@ -71,6 +71,7 @@ type Config struct {
 	DumpFile             string
 	BlockedStatus        string
 	ExcludeBlockedStatus string
+	TraceHeaders         string
 	StripHeaders         string
 	SanitizeURL          bool
 }

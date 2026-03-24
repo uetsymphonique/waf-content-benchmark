@@ -24,7 +24,8 @@ func main() {
 	// Initialize components
 	blockedFilter := efficacy.ParseStatusFilter(cfg.BlockedStatus)
 	excludeBlockedFilter := efficacy.ParseStatusFilter(cfg.ExcludeBlockedStatus)
-	client := efficacy.NewHTTPClient(cfg.WAFURL, cfg.Timeout, blockedFilter, excludeBlockedFilter)
+	traceHeaderFilter := efficacy.ParseTraceHeaderFilter(cfg.TraceHeaders)
+	client := efficacy.NewHTTPClient(cfg.WAFURL, cfg.Timeout, blockedFilter, excludeBlockedFilter, traceHeaderFilter)
 	analyzer := efficacy.NewResultAnalyzer()
 
 	if err := analyzer.InitWriter(cfg.OutputDir, cfg.Mode); err != nil {

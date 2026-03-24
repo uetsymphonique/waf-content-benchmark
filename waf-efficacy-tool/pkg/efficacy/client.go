@@ -14,13 +14,15 @@ type HTTPClient struct {
 	baseURL              string
 	blockedFilter        *StatusFilter
 	excludeBlockedFilter *StatusFilter
+	traceHeaderFilter    *TraceHeaderFilter
 }
 
-func NewHTTPClient(baseURL string, timeout int, blockedFilter *StatusFilter, excludeBlockedFilter *StatusFilter) *HTTPClient {
+func NewHTTPClient(baseURL string, timeout int, blockedFilter *StatusFilter, excludeBlockedFilter *StatusFilter, traceHeaderFilter *TraceHeaderFilter) *HTTPClient {
 	return &HTTPClient{
 		baseURL:              baseURL,
 		blockedFilter:        blockedFilter,
 		excludeBlockedFilter: excludeBlockedFilter,
+		traceHeaderFilter:    traceHeaderFilter,
 		client: &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
 		},
@@ -77,10 +79,31 @@ func (hc *HTTPClient) SendRequest(ctx context.Context, payload Payload) (int, bo
 		Errorf("Failed to read response body: %v", err)
 	}
 
-	// Detection logic configurable via -blocked-status and -exclude-blocked-status
-	isBlocked := hc.blockedFilter != nil && hc.blockedFilter.Matches(resp.StatusCode)
-	if isBlocked && hc.excludeBlockedFilter != nil && hc.excludeBlockedFilter.Matches(resp.StatusCode) {
-		isBlocked = false
+	// Layer-1: status based detection
+	statusLayerEnabled := hc.blockedFilter != nil
+	statusBlocked := false
+	if statusLayerEnabled {
+		statusBlocked = hc.blockedFilter.Matches(resp.StatusCode)
+		if statusBlocked && hc.excludeBlockedFilter != nil && hc.excludeBlockedFilter.Matches(resp.StatusCode) {
+			statusBlocked = false
+		}
+	}
+
+	// Layer-2: trace-header based pass-through detection
+	traceLayerEnabled := hc.traceHeaderFilter != nil
+	tracePassed := false
+	if traceLayerEnabled {
+		tracePassed = hc.traceHeaderFilter.Matches(resp.Header)
+	}
+
+	isBlocked := false
+	switch {
+	case statusLayerEnabled && traceLayerEnabled:
+		isBlocked = statusBlocked && !tracePassed
+	case statusLayerEnabled:
+		isBlocked = statusBlocked
+	case traceLayerEnabled:
+		isBlocked = !tracePassed
 	}
 
 	// Debug: Print full response
@@ -103,6 +126,7 @@ func (hc *HTTPClient) SendRequest(ctx context.Context, payload Payload) (int, bo
 		}
 	}
 	fullResp.WriteString(strings.Repeat("-", 70) + "\n")
+	fullResp.WriteString(fmt.Sprintf("Detection: status_layer=%t status_blocked=%t trace_layer=%t trace_passed=%t\n", statusLayerEnabled, statusBlocked, traceLayerEnabled, tracePassed))
 	fullResp.WriteString(fmt.Sprintf("Result: isBlocked=%t\n", isBlocked))
 	fullResp.WriteString(strings.Repeat("=", 70) + "\n")
 
