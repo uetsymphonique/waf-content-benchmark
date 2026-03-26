@@ -1,0 +1,13 @@
+key,requests_fired,prevented_count,bypassed_count,errored_count,block_rate_pct
+crlf,759,236,523,0,31.09
+path-traversal,82572,28667,53905,0,34.72
+rce,304137,131517,172620,0,43.24
+nosql,104,67,37,0,64.42
+xxe,460,332,128,0,72.17
+ldap,2592,1944,648,0,75.00
+shellshock,24,21,3,0,87.50
+command-injection,26408,23941,2467,0,90.66
+ssti,321,299,22,0,93.15
+ssi-esi,276,258,18,0,93.48
+sqli,3789,3609,180,0,95.25
+xss,44672,43981,691,0,98.45
