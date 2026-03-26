@@ -109,17 +109,15 @@ func (ra *ResultAnalyzer) AddResult(r TestResult) {
 
 	if r.StatusCode == 0 {
 		fs.Errored++
-	} else {
-		fs.StatusCodes[r.StatusCode]++
-		if r.IsBlocked {
-			fs.Prevented++
-		} else {
-			fs.Bypassed++
-		}
+		ra.summary.ErroredCount++
+		return // Skip errors for success/block stats
 	}
 
-	if r.StatusCode == 0 {
-		return // Skip errors for global summary
+	fs.StatusCodes[r.StatusCode]++
+	if r.IsBlocked {
+		fs.Prevented++
+	} else {
+		fs.Bypassed++
 	}
 
 	// Update Global Metrics
@@ -172,7 +170,13 @@ func (ra *ResultAnalyzer) PrintSummary() {
 	case ModeTruePositive:
 		fmt.Println("TRUE POSITIVE TEST RESULTS")
 		fmt.Println(strings.Repeat("=", 60))
-		fmt.Printf("Total Malicious Requests: %d\n", ra.summary.TotalRequests)
+		totalSent := ra.summary.TotalRequests + ra.summary.ErroredCount
+		fmt.Printf("Total Requests Sent:      %d\n", totalSent)
+		fmt.Printf("Successful Requests:      %d\n", ra.summary.TotalRequests)
+		if ra.summary.ErroredCount > 0 {
+			errorRate := float64(ra.summary.ErroredCount) / float64(totalSent) * 100
+			fmt.Printf("Errored Requests:         %d (%.2f%%)\n", ra.summary.ErroredCount, errorRate)
+		}
 		fmt.Printf("Bypassed (Not 4xx):       %d\n", ra.summary.BypassedCount)
 		fmt.Printf("Blocked (4xx):            %d\n", ra.summary.BlockedCount)
 		fmt.Printf("Bypass Rate:              %.2f%%\n", ra.summary.BypassRate)
@@ -180,7 +184,13 @@ func (ra *ResultAnalyzer) PrintSummary() {
 	case ModeFalsePositive:
 		fmt.Println("FALSE POSITIVE TEST RESULTS")
 		fmt.Println(strings.Repeat("=", 60))
-		fmt.Printf("Total Legitimate Requests: %d\n", ra.summary.TotalRequests)
+		totalSent := ra.summary.TotalRequests + ra.summary.ErroredCount
+		fmt.Printf("Total Requests Sent:       %d\n", totalSent)
+		fmt.Printf("Successful Requests:       %d\n", ra.summary.TotalRequests)
+		if ra.summary.ErroredCount > 0 {
+			errorRate := float64(ra.summary.ErroredCount) / float64(totalSent) * 100
+			fmt.Printf("Errored Requests:          %d (%.2f%%)\n", ra.summary.ErroredCount, errorRate)
+		}
 		fmt.Printf("Allowed (Not 4xx):         %d\n", ra.summary.AllowedCount)
 		fmt.Printf("False Positives (4xx):     %d\n", ra.summary.FalsePositiveCount)
 		fmt.Printf("False Positive Rate:       %.2f%%\n", ra.summary.FPRate)
@@ -188,7 +198,14 @@ func (ra *ResultAnalyzer) PrintSummary() {
 	case ModeMixed:
 		fmt.Println("MIXED TEST RESULTS")
 		fmt.Println(strings.Repeat("=", 60))
-		fmt.Println("True Positive Metrics:")
+		totalSent := ra.summary.TotalRequests + ra.summary.ErroredCount
+		fmt.Printf("Total Requests Sent:  %d\n", totalSent)
+		fmt.Printf("Successful Requests:  %d\n", ra.summary.TotalRequests)
+		if ra.summary.ErroredCount > 0 {
+			errorRate := float64(ra.summary.ErroredCount) / float64(totalSent) * 100
+			fmt.Printf("Errored Requests:     %d (%.2f%%)\n", ra.summary.ErroredCount, errorRate)
+		}
+		fmt.Println("\nTrue Positive Metrics:")
 		fmt.Printf("  Bypassed:     %d\n", ra.summary.BypassedCount)
 		fmt.Printf("  Blocked:      %d\n", ra.summary.BlockedCount)
 		fmt.Printf("  Bypass Rate:  %.2f%%\n", ra.summary.BypassRate)

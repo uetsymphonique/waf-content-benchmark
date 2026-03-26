@@ -38,6 +38,7 @@ type TestResult struct {
 type TestSummary struct {
 	Mode               TestMode
 	TotalRequests      int
+	ErroredCount       int     // Requests that failed with network/timeout errors
 	BypassedCount      int     // TP mode
 	BlockedCount       int     // TP mode
 	BypassRate         float64 // TP mode
