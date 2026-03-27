@@ -1,6 +1,8 @@
 legitimate/
+Data/Legitimate/
 legitimate.*
 !legitimate.7z.*
 *.csv
 *.log
 *.exe
+waf-efficacy

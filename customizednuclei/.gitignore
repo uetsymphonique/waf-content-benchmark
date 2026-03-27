@@ -8,3 +8,4 @@
 !crs-stat-cve.csv
 !cdn-stat-owasp.csv
 *.log
+nuclei-waf
