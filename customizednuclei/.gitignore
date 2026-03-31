@@ -3,9 +3,7 @@
 
 # Test output
 *.csv
-!crs-stat-owasp.csv
-!cdn-stat-cve.csv
-!crs-stat-cve.csv
-!cdn-stat-owasp.csv
+!*-stat-owasp.csv
+!*-stat-cve.csv
 *.log
 nuclei-waf
