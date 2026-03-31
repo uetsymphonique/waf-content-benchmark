@@ -1,0 +1,115 @@
+$ ./nuclei-waf -template ../fuzz-owasp-top10/templates/ -target "http://waftest.mydomain.web" -output stats/cdn/owasp_top10.csv -dump-file stats/cdn/owasp_4xx_5xx.log -dump-status 4**,5** -log-level error -c 20 -mode fuzz -trace-headers "X-Trace-Layer: backend-flask,X-Trace-Proxy: apache" 
+[Workers: 1, PayloadThreads: 20] Processed: 16/16 (Run: 16, Skip/Err: 0) | Requests Fired: 466114 | Speed: 120 req/s | Elapsed: 1h4m42s
+────────────────────────────────────────────────────────────
+Templates : 16 total
+Requests  : 466114 defined / 466114 fired
+
+[ Fuzz / Request Metrics ]
+Requests  (Fired)     : 466114
+Payloads  (Prevented) : 234834 (50.4%)
+Payloads  (Bypassed)  : 231280 (49.6%)
+Payloads  (Errored)   : 0 (0.0%)
+Status Codes          : 200:231241,400:3904,403:90686,404:1,411:140243,502:39
+────────────────────────────────────────────────────────────
+$ ./nuclei-waf -template ../nuclei-templates/http/cves -target "http://waftest.mydomain.web" -output stats/cdn/cve_top10.csv -dump-file stats/cdn/cve_4xx_5xx.log -dump-status 4**,5** -log-level error -c 20 -mode cve -trace-headers "X-Trace-Layer: backend-flask,X-Trace-Proxy: apache" 
+[Workers: 20, PayloadThreads: 1] Processed: 3840/3840 (Run: 3835, Skip/Err: 5) | Requests Fired: 8492 | Speed: 63 req/s | Elapsed: 2m15ss
+────────────────────────────────────────────────────────────
+Templates : 3840 total  (5 skipped/err)  (19 incomplete)
+Requests  : 8543 defined / 8492 fired
+
+[ CVE / Template Metrics ]
+Templates (Complete)  : 3816
+Coverage  (Complete)  : 2518 prevented (66.0%) / 1298 bypassed (34.0%)
+Templates (Incomplete): 19
+Coverage  (Incomplete): 2 prevented (10.5%) / 17 bypassed (89.5%)
+Status Codes (Complt) : 0:8,200:4948,204:5,400:197,403:3280,411:2,501:1,502:1
+Status Codes (Incmp)  : 200:48,403:2
+────────────────────────────────────────────────────────────
+
+$ ./nuclei-waf -template ../fuzz-owasp-top10/templates/ -target "http://waftest.local" -output stats/crs/owasp_top10.csv -dump-file stats/crs/owasp_4xx_5xx.log -dump-status 4**,5** -log-level error -c 10 -mode fuzz -trace-headers "X-Trace-Layer: backend-simple"
+[Workers: 1, PayloadThreads: 10] Processed: 16/16 (Run: 16, Skip/Err: 0) | Requests Fired: 466114 | Speed: 123 req/s | Elapsed: 1h3m21s
+────────────────────────────────────────────────────────────
+Templates : 16 total
+Requests  : 466114 defined / 466114 fired
+
+[ Fuzz / Request Metrics ]
+Requests  (Fired)     : 466114
+Payloads  (Prevented) : 417088 (89.5%)
+Payloads  (Bypassed)  : 49026 (10.5%)
+Payloads  (Errored)   : 0 (0.0%)
+Status Codes          : 200:49026,400:4106,403:412982
+───────────────────────────────────────────────────────────
+
+$ ./nuclei-waf -template ../nuclei-templates/http/cves -target "http://waftest.local" -output stats/crs/cve_top10.csv -dump-file stats/crs/cve_4xx_5xx.log -dump-status 4**,5** -log-level error -c 10 -mode cve -trace-headers "X-Trace-Layer: backend-simple"
+[Workers: 10, PayloadThreads: 1] Processed: 3840/3840 (Run: 3835, Skip/Err: 5) | Requests Fired: 8501 | Speed: 61 req/s | Elapsed: 2m20ss
+────────────────────────────────────────────────────────────
+Templates : 3840 total  (5 skipped/err)  (10 incomplete)
+Requests  : 8543 defined / 8501 fired
+
+[ CVE / Template Metrics ]
+Templates (Complete)  : 3825
+Coverage  (Complete)  : 3309 prevented (86.5%) / 516 bypassed (13.5%)
+Templates (Incomplete): 10
+Coverage  (Incomplete): 4 prevented (40.0%) / 6 bypassed (60.0%)
+Status Codes (Complt) : 0:8,200:2654,204:2,400:181,403:5610,501:1
+Status Codes (Incmp)  : 200:40,403:5
+────────────────────────────────────────────────────────────
+
+
+┌──(kali㉿kali)-[~/Tools/waf-content-benchmark/waf-efficacy-tool]
+└─$ ./waf-efficacy -workers 20 -u http://waftest.mydomain.web -o stats/cdn -legitimate Data/Legitimate -sanitize-url=true -strip-headers "Cookie,Origin,Referer,Sec-Fetch-*" -trace-headers "X-Trace-Layer: backend-flask,X-Trace-Proxy: apache" -fp-only -dump-file stats/cdn/fp_4xx_5xx.log -dump-status 4**,5** -exclude-dump-status 403 -timeout 15
+WAF Efficacy Testing Tool
+Target: http://waftest.mydomain.web
+Mode: fp
+
+Running False Positive tests...
+⠙ Processing Payloads (1040242/-, 76 it/s) [3h47m20s]  
+
+
+============================================================
+FALSE POSITIVE TEST RESULTS
+============================================================
+Total Requests Sent:       1040242
+Successful Requests:       1040213
+Errored Requests:          29 (0.00%)
+Allowed (Not 4xx):         1037523
+False Positives (4xx):     2690
+False Positive Rate:       0.26%
+
+Status Code Breakdown:
+  200: 1035571
+  206: 1313
+  400: 14
+  403: 2365
+  414: 228
+  416: 717
+  502: 5
+============================================================
+                                                                                                                                                                                                                                            
+┌──(kali㉿kali)-[~/Tools/waf-content-benchmark/waf-efficacy-tool]
+└─$ ./waf-efficacy -workers 10 -u http://waftest.local -o stats/crs -legitimate Data/Legitimate -sanitize-url=true -strip-headers "Cookie,Origin,Referer,Sec-Fetch-*" -trace-headers "X-Trace-Layer: backend-simple" -fp-only -dump-file stats/crs/fp_4xx_5xx.log -dump-status 4**,5** -exclude-dump-status 403 -timeout 20
+WAF Efficacy Testing Tool
+Target: http://waftest.local
+Mode: fp
+
+Running False Positive tests...
+⠴ Processing Payloads (1040242/-, 78 it/s) [3h42m25s]  
+
+
+============================================================
+FALSE POSITIVE TEST RESULTS
+============================================================
+Total Requests Sent:       1040242
+Successful Requests:       1030253
+Errored Requests:          9989 (0.96%)
+Allowed (Not 4xx):         456611
+False Positives (4xx):     573642
+False Positive Rate:       55.68%
+
+Status Code Breakdown:
+  200: 456611
+  400: 672
+  403: 572940
+  413: 9
+  414: 21
+============================================================
