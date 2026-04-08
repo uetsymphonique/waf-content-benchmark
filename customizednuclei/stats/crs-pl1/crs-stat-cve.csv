@@ -1,5 +1,5 @@
 severity,eligible_templates,blocked_templates,blocked_rate_pct
-critical,1215,653,53.74
-high,922,567,61.50
-medium,1318,984,74.66
+critical,1218,776,63.71
+high,924,615,66.56
+medium,1323,937,70.82
 low,10,5,50.00
