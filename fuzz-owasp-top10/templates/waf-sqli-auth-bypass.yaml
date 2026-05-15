@@ -1,0 +1,42 @@
+id: waf-sqli-auth-bypass-testing
+info:
+  name: WAF Efficacy Testing - SQLi (Auth Bypass & Generic Fuzz)
+  author: your-name
+  severity: info
+  description: Testing WAF resilience against Login/Authentication bypass payloads, basic truth conditions, and query manipulators.
+  tags: waf-test, sqli, auth-bypass, fuzzing
+
+variables:
+  payload_list: ../payloads/sqli_auth_bypass.txt
+
+http:
+  - raw:
+      - |+
+        POST /login HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+        
+        username={{payloads}}&password={{payloads}}
+
+      - |+
+        GET /admin?id={{payloads}}&role={{payloads}} HTTP/1.1
+        Host: {{Hostname}}
+        Accept: */*
+
+      - |+
+        GET / HTTP/1.1
+        Host: {{Hostname}}
+        Cookie: session_id={{payloads}}; role={{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"

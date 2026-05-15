@@ -1,0 +1,67 @@
+id: waf-xxe-testing
+info:
+  name: WAF Efficacy Testing - XML External Entity (XXE)
+  author: your-name
+  severity: info
+  description: Testing WAF resilience against XXE payloads across various XML structures and Content-Types.
+  tags: waf-test, xxe, fuzzing, xml
+
+variables:
+  payload_list: ../payloads/xxe.txt
+
+http:
+  - raw:
+      - |+
+        POST /api/xml-endpoint HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/xml
+        Accept: application/xml
+
+        {{payloads}}
+
+      - |+
+        POST /api/json-endpoint HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/json
+        Accept: application/json
+
+        {"xml_data": "{{payloads}}"}
+
+      - |+
+        POST /ws/soap HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: text/xml; charset=utf-8
+        SOAPAction: "http://example.com/action"
+
+        <?xml version="1.0" encoding="utf-8"?>
+        <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+          <soap:Body>
+            <ValidateData xmlns="http://example.com/">
+              <xmlString><![CDATA[{{payloads}}]]></xmlString>
+            </ValidateData>
+          </soap:Body>
+        </soap:Envelope>
+
+      - |+
+        POST /upload HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+        
+        ------WebKitFormBoundary7MA4YWxkTrZu0gW
+        Content-Disposition: form-data; name="file"; filename="payload.xml"
+        Content-Type: text/xml
+
+        {{payloads}}
+        ------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
