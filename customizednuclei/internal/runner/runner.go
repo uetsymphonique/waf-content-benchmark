@@ -148,12 +148,13 @@ type ExecResult struct {
 // parses it, fires all HTTP requests against the target, and prints any matches.
 // When applyPreprocess is false the original template is passed directly to
 // Nuclei without any modification — useful for backend simulation mode.
-func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreprocess bool) (*ExecResult, error) {
+// When injectID is true, the template ID is prepended to every request path.
+func (r *Runner) Execute(ctx context.Context, templatePath string, applyPreprocess bool, injectID bool) (*ExecResult, error) {
 	var parsePath string
 	var cleanupFn func()
 
 	if applyPreprocess {
-		pre, err := preprocess.PreprocessTemplate(templatePath)
+		pre, err := preprocess.PreprocessTemplate(templatePath, injectID)
 		if err != nil {
 			return nil, fmt.Errorf("preprocess %q: %w", templatePath, err)
 		}

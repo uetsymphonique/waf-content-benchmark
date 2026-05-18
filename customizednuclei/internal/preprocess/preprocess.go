@@ -32,9 +32,12 @@ func nopCleanup() {}
 //     `http[].payloads:` blocks) to absolute so the temp file location
 //     does not break wordlist loading.
 //
+// When injectID is true, the template ID is prepended to every request path
+// so that WAF access logs can be grepped by template name.
+//
 // The modified template is written to a unique temp file; caller must invoke
 // result.cleanup() after execution to remove it.
-func PreprocessTemplate(templatePath string) (*Result, error) {
+func PreprocessTemplate(templatePath string, injectID bool) (*Result, error) {
 	raw, err := os.ReadFile(templatePath)
 	if err != nil {
 		return nil, fmt.Errorf("read template: %w", err)
@@ -66,7 +69,7 @@ func PreprocessTemplate(templatePath string) (*Result, error) {
 	}
 
 	// Step 1.5 — inject template ID into paths to assist WAF log grepping
-	if templateID != "" {
+	if injectID && templateID != "" {
 		for _, block := range httpBlocks {
 			m, ok := block.(map[string]interface{})
 			if !ok {
