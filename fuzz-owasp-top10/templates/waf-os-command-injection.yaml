@@ -10,6 +10,7 @@ variables:
   payload_list: ../payloads/os-command-injection.txt
 
 http:
+  # Block 1: GET requests — unsafe: true preserves payloads as-is in URL/headers (no encoding)
   - raw:
       - |+
         GET /ping?host=127.0.0.1{{payloads}} HTTP/1.1
@@ -22,18 +23,32 @@ http:
         User-Agent: Mozilla/5.0 {{payloads}}
         Referer: https://google.com/search?q={{payloads}}
 
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  # Block 2: POST requests — normal mode so Content-Length is set automatically
+  - raw:
       - |+
         POST /api/utilities/ping HTTP/1.1
         Host: {{Hostname}}
         Content-Type: application/x-www-form-urlencoded
-        
+
         target=127.0.0.1&options={{payloads}}
 
       - |+
         POST /api/exec HTTP/1.1
         Host: {{Hostname}}
         Content-Type: application/json
-        
+
         {"command": "echo", "args": "{{payloads}}"}
 
     payloads:
@@ -41,8 +56,6 @@ http:
         - "{{payload_list}}"
 
     attack: batteringram
-
-    unsafe: true
     matchers:
       - type: word
         part: header

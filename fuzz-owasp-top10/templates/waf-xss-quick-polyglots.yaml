@@ -17,13 +17,6 @@ http:
         Accept: text/html
 
       - |+
-        POST /contact HTTP/1.1
-        Host: {{Hostname}}
-        Content-Type: application/x-www-form-urlencoded
-        
-        name=guest&message={{payloads}}
-
-      - |+
         GET / HTTP/1.1
         Host: {{Hostname}}
         User-Agent: {{payloads}}
@@ -34,8 +27,26 @@ http:
         - "{{payload_list}}"
 
     attack: batteringram
-
     unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  - raw:
+      - |+
+        POST /contact HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+
+        name=guest&message={{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
     matchers:
       - type: word
         part: header

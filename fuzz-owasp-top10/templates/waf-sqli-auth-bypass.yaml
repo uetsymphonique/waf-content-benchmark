@@ -12,13 +12,6 @@ variables:
 http:
   - raw:
       - |+
-        POST /login HTTP/1.1
-        Host: {{Hostname}}
-        Content-Type: application/x-www-form-urlencoded
-        
-        username={{payloads}}&password={{payloads}}
-
-      - |+
         GET /admin?id={{payloads}}&role={{payloads}} HTTP/1.1
         Host: {{Hostname}}
         Accept: */*
@@ -33,8 +26,26 @@ http:
         - "{{payload_list}}"
 
     attack: batteringram
-
     unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  - raw:
+      - |+
+        POST /login HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+
+        username={{payloads}}&password={{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
     matchers:
       - type: word
         part: header

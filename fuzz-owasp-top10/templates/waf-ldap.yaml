@@ -17,18 +17,33 @@ http:
         Host: {{Hostname}}
         Accept: */*
 
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+      attributes:
+        - "{{attribute_list}}"
+
+    attack: clusterbomb
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  - raw:
       - |+
         POST /login HTTP/1.1
         Host: {{Hostname}}
         Content-Type: application/x-www-form-urlencoded
-        
+
         user={{payloads}}&password=admin
 
       - |+
         POST /search HTTP/1.1
         Host: {{Hostname}}
         Content-Type: application/json
-        
+
         {"filter": "{{attributes}}=*"}
 
     payloads:
@@ -38,8 +53,6 @@ http:
         - "{{attribute_list}}"
 
     attack: clusterbomb
-
-    unsafe: true
     matchers:
       - type: word
         part: header

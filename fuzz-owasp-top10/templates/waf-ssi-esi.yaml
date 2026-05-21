@@ -17,13 +17,6 @@ http:
         Accept: */*
 
       - |+
-        POST /comment HTTP/1.1
-        Host: {{Hostname}}
-        Content-Type: application/x-www-form-urlencoded
-        
-        user=test&body={{payloads}}
-
-      - |+
         GET / HTTP/1.1
         Host: {{Hostname}}
         User-Agent: Mozilla/5.0
@@ -36,8 +29,26 @@ http:
         - "{{payload_list}}"
 
     attack: batteringram
-
     unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  - raw:
+      - |+
+        POST /comment HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+
+        user=test&body={{payloads}}
+
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
     matchers:
       - type: word
         part: header

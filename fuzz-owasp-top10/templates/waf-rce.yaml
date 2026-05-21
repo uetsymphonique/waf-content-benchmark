@@ -22,11 +22,24 @@ http:
         User-Agent: Mozilla/5.0 {{payloads}}
         Referer: https://google.com/search?q={{payloads}}
 
+    payloads:
+      payloads:
+        - "{{payload_list}}"
+
+    attack: batteringram
+    unsafe: true
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "HTTP/"
+
+  - raw:
       - |+
         POST /api/exec HTTP/1.1
         Host: {{Hostname}}
         Content-Type: application/x-www-form-urlencoded
-        
+
         command=help&args={{payloads}}
 
     payloads:
@@ -34,8 +47,6 @@ http:
         - "{{payload_list}}"
 
     attack: batteringram
-
-    unsafe: true
     matchers:
       - type: word
         part: header
