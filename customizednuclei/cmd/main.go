@@ -147,7 +147,7 @@ func main() {
 	vulnFilter := fs.String("vuln", "", "Comma-separated list of filename prefixes to filter templates (e.g. sqli,xss)")
 	concurrency := fs.Int("c", 5, "Number of concurrent workers")
 	noPreprocess := fs.Bool("no-preprocess", false, "Disable template preprocessing — use raw Nuclei engine behaviour (for backend simulation mode)")
-	injectID := fs.Bool("inject-id", true, "Prepend template ID to request paths for WAF log traceability (disable with -inject-id=false)")
+	injectID := fs.Bool("inject-id", false, "Prepend template ID to request paths for WAF log traceability (enable with -inject-id)")
 	mode := fs.String("mode", "cve", "Evaluation mode: 'cve' (1 block = full template prevented) or 'fuzz' (counts individual payload bypasses)")
 	dumpStatusFilter := fs.String("dump-status", "", "Comma-separated list of status codes to dump raw requests for (e.g. 200,20*,4**)")
 	excludeDumpStatusFilter := fs.String("exclude-dump-status", "", "Comma-separated status patterns excluded from dump-status (e.g. 403,416)")

@@ -1,64 +1,101 @@
 # WAF Content Benchmark (WCB)
 
-WCB is a high-performance evaluation system for Web Application Firewall (WAF) content filtering based on the Nuclei SDK. It is specifically optimized for large-scale payload fuzzing and security coverage benchmarking.
+WCB measures Web Application Firewall efficacy using two independent tools, each serving a distinct role:
 
-## Key Features (by tool)
+| Tool | Purpose | Template/Data source |
+|------|---------|----------------------|
+| `customizednuclei` | Attack coverage — bypass/prevent ratio | `nuclei-templates/` (CVE mode) · `fuzz-owasp-top10/` (Fuzz mode) |
+| `waf-efficacy-tool` | False Positive rate — legitimate traffic | `waf-efficacy-tool/Data/Legitimate/` (see setup below) |
 
-- **Customized Nuclei (attack/bypass testing)**
-  - Specialized fuzzing to measure per-request Bypass/Prevented ratios.
-  - Payload Preprocessor with custom `preprocessors` block (Replace, Encode, Obfuscate) to probe normalization and decoding.
-  - OOM prevention via streaming `OnResult` callback (handles millions of payloads safely).
-  - Dual modes:
-    - `-mode cve`: Template-centric (vulnerability-level coverage).
-    - `-mode fuzz`: Request-centric (payload-level efficacy).
-  - Filtering & exporting:
-    - `-cve` filter by CVE year/range.
-    - `-vuln` filter by vuln prefixes (e.g., `sqli,xss`).
-    - `-dump-status` to export raw HTTP requests matching status patterns.
+---
 
-- **WAF Efficacy Tool (false-positive testing with legitimate traffic)**
-  - Consumes a Legitimate traffic dataset (JSON) to measure False Positive rate.
-  - Also supports Malicious datasets for TP, and a Mixed mode; in this repo it is primarily used for FP assessment.
-  - High-throughput worker pool with streaming JSON loader (low memory usage).
-  - CSV outputs and console summaries for FP/TP metrics; optional raw request dumping by status with include/exclude patterns.
+## Tool 1 — Customized Nuclei (Attack Coverage)
 
-## Project Structure
+A heavily modified Nuclei SDK runner designed for WAF testing rather than vulnerability detection. It fires HTTP requests and measures how many were blocked (Prevented) vs. passed through (Bypassed) by the WAF.
 
-- `customizednuclei/`: Nuclei-based WAF fuzzer/benchmark (core runner + preprocessing pipeline).
-- `customizednuclei/docs/`: Concurrency & OOM prevention, preprocessing pipeline details.
-- `fuzz-owasp-top10/`: Curated fuzz templates and large payload wordlists (request-centric testing).
-- `nuclei-templates/`: Standard CVE exploitation templates (vulnerability-centric testing).
-- `waf-efficacy-tool/`: Dataset-driven WAF tester (direct HTTP client) using JSON payload sets — in this repo primarily used for FP testing with a Legitimate traffic dataset.
-- `Data/Malicious`, `Data/Legitimate` (example paths): JSON datasets for `waf-efficacy-tool`.
+Two modes correspond to two different template sources:
 
-## Quick Start
+| Mode | Flag | Template source | Measurement unit |
+|------|------|-----------------|-----------------|
+| CVE | `-mode cve` | `nuclei-templates/http/cves/` | Per-template (1 block = prevented) |
+| Fuzz | `-mode fuzz` | `fuzz-owasp-top10/templates/` | Per-request/payload |
 
-### 1. Build the Nuclei-based tool (customizednuclei)
+### Key features
+- Preprocessing pipeline: rewrites templates before execution so every request fires regardless of WAF response (no Interactsh required, no OOM on large payload sets).
+- Custom `preprocessors` block in fuzz templates to derive transformed wordlists (replace, encode, obfuscate).
+- Two detection layers: status-code patterns (`-blocked-status`) and trace-header pass-through (`-trace-headers`).
+- `-inject-id`: prepends template ID to request paths for WAF log grepping.
+- `-dump-status` / `-dump-file`: save raw requests matching a status filter.
+
+### Build
 ```bash
 cd customizednuclei
 go build -o nuclei-waf.exe ./cmd
 ```
 
-### 2. Run Benchmark (Fuzzing Mode)
+### CVE Coverage Mode
+Tests how many published CVE exploits the WAF blocks. Templates come from the `nuclei-templates/` submodule.
+
 ```bash
-.\nuclei-waf.exe -template ..\fuzz-owasp-top10\templates -target http://your-waf.site -mode fuzz -output result.csv -c 25
+# All CVEs
+.\nuclei-waf.exe -template ..\nuclei-templates\http\cves -target http://your-waf.site -mode cve -blocked-status 403 -output cve_results.csv -c 10
+
+# Specific year range
+.\nuclei-waf.exe -template ..\nuclei-templates\http\cves -cve 2021-2023 -target http://your-waf.site -mode cve -blocked-status 403,40* -output cve_results.csv
 ```
 
-### 3. Check CVE Coverage (CVE Mode)
+### OWASP Fuzz Mode
+Tests payload-level coverage using the curated `fuzz-owasp-top10/` templates. Each template drives thousands of payloads; concurrency (`-c`) is allocated to payload threads.
+
 ```bash
-.\nuclei-waf.exe -template ..\nuclei-templates\http\cves -cve 2021-2022 -target http://your-waf.site -mode cve -output cve_test.csv
+# All OWASP categories
+.\nuclei-waf.exe -template ..\fuzz-owasp-top10\templates -target http://your-waf.site -mode fuzz -blocked-status 403 -output fuzz_results.csv -c 25
+
+# Specific vulnerability categories
+.\nuclei-waf.exe -template ..\fuzz-owasp-top10\templates -vuln sqli,xss -target http://your-waf.site -mode fuzz -blocked-status 403 -output fuzz_results.csv -c 25
 ```
 
-### 4. Specialized Filtering
-```bash
-.\nuclei-waf.exe -template ..\fuzz-owasp-top10\templates -vuln sqli,xss -target http://your-waf.site -mode fuzz
+### Detection flags
+At least one of `-blocked-status` or `-trace-headers` is required:
+
+- `-blocked-status <patterns>`: status codes treated as "blocked" (e.g. `403`, `4**`, `40*`).
+- `-exclude-blocked-status <patterns>`: subtract codes from the blocked set (e.g. `400,416`).
+- `-trace-headers <header:value,...>`: if a response carries this header, the request reached the backend (not blocked). Use `*` for any value (e.g. `X-Trace-Proxy:*`).
+- Combined: blocked = matches `-blocked-status` AND trace header absent.
+
+### Additional flags
+- `-c <int>`: concurrency (default: `5`). Behaviour differs by mode:
+  - `fuzz` — all threads are allocated to **payload concurrency** (1 template worker); prevents starvation when templates have unequal payload counts.
+  - `cve` — threads are allocated to **template workers** (parallel template execution); each worker gets `c/N` payload threads.
+- `-cve <years>`: filter `nuclei-templates/` subfolders by year or range (e.g. `2023`, `2021-2023`).
+- `-vuln <prefixes>`: filter fuzz templates by filename prefix (e.g. `sqli,xss,rce`).
+- `-no-preprocess`: skip preprocessing — passes templates raw to Nuclei (backend simulation).
+- `-inject-id`: prepend template ID to request paths for WAF log grepping (default: off).
+- `-log-level <level>`: logging verbosity — `fatal | silent | error | info | warning | debug | verbose` (default: `info`). Use `debug` or `verbose` to dump raw HTTP traffic to console.
+- `-output <path>`: CSV output file (default: `results.csv`).
+- `-dump-status <patterns>` / `-exclude-dump-status <patterns>` / `-dump-file <path>`: capture raw requests by status code pattern; exclude patterns subtract from the dump set.
+
+### Output (CSV)
+```
+template_id, template_file, severity, requests_defined, requests_fired, prevented_count, bypassed_count, errored_count, status_codes
 ```
 
 ---
 
-## Alternative: Dataset-Driven Tester (waf-efficacy-tool)
+## Tool 2 — WAF Efficacy Tool (False Positive Rate)
 
-Primarily for False-Positive testing in this repo, leveraging a Legitimate web traffic dataset. Also supports Malicious datasets and Mixed mode when needed.
+A standalone dataset-driven HTTP client pulled from an external repo. It replays captured web traffic against the WAF and measures the False Positive rate — how often the WAF incorrectly blocks legitimate requests.
+
+> **Scope in this repo:** The tool supports both TP (Malicious) and FP (Legitimate) datasets, but the Malicious dataset bundled here is incomplete. **Only the FP mode is used** in this benchmark, with the Legitimate dataset described below.
+
+### Dataset setup
+Download the Legitimate traffic dataset as described in [`waf-efficacy-tool/Data/README.md`](waf-efficacy-tool/Data/README.md):
+
+```bash
+cd waf-efficacy-tool
+wget https://downloads.openappsec.io/waf-comparison-project/legitimate.zip
+unzip legitimate.zip -d Data/
+```
 
 ### Build
 ```bash
@@ -66,80 +103,38 @@ cd waf-efficacy-tool\cmd\waf-efficacy
 go build -o waf-efficacy.exe
 ```
 
-### Run (Mixed mode – default)
+### Run (FP testing)
 ```bash
-.\waf-efficacy.exe -u https://your-waf.site -malicious Data\Malicious -legitimate Data\Legitimate -o out -workers 20 -timeout 10
+.\waf-efficacy.exe -u https://your-waf.site -legitimate Data\Legitimate -o out -fp-only -blocked-status 4** -exclude-blocked-status 400,416 -workers 20 -timeout 10
 ```
 
-### True Positive only
+Dump requests that received a non-403 4xx response:
 ```bash
-.\waf-efficacy.exe -u https://your-waf.site -malicious Data\Malicious -o out -tp-only -workers 20
+.\waf-efficacy.exe -u https://your-waf.site -legitimate Data\Legitimate -fp-only -blocked-status 4** -exclude-blocked-status 400,416 -dump-status 4** -exclude-dump-status 403 -dump-file stats\fp_4xx.log
 ```
 
-### False Positive only
-```bash
-.\waf-efficacy.exe -u https://your-waf.site -legitimate Data\Legitimate -o out -fp-only -workers 20
+### Detection flags
+Same logic as Tool 1: `-blocked-status`, `-exclude-blocked-status`, `-trace-headers`. At least one is required.
+
+### Additional flags
+- `-workers <int>`: number of concurrent HTTP workers (default: `10`).
+- `-timeout <int>`: per-request timeout in seconds (default: `5`).
+- `-log-level <level>`: logging verbosity — `silent | error | info | debug` (default: `silent`).
+- `-strip-headers <names>`: remove headers before sending (e.g. `host,content-length,sec-*`). Useful when replaying captured traffic that includes reserved headers.
+- `-sanitize-url`: percent-encode bare absolute URLs appearing after `?` in query strings (default: `true`).
+- `-dump-status` / `-exclude-dump-status` / `-dump-file`: save raw requests by status pattern.
+
+### Output (CSV)
 ```
-
-### Dump raw requests for certain statuses
-```bash
-.\waf-efficacy.exe -u https://your-waf.site -malicious Data\Malicious -dump-status 200,20*,403 -dump-file dumped_requests.log
+test_file, requests_fired, prevented, bypassed, errored, status_codes
 ```
+File written to output dir as `fp_results.csv`. Summary (False Positive Rate) printed to console.
 
-Exclude specific codes from the dump (e.g., dump all 4xx except 403):
-```bash
-.\waf-efficacy.exe -u https://your-waf.site -legitimate Data\Legitimate -dump-status 4** -exclude-dump-status 403 -dump-file stats\cdn\cdn_fp_4xx.log
-```
-
-### Advanced flags (waf-efficacy-tool)
-- `-blocked-status` / `-exclude-blocked-status`: control which status codes are treated as WAF "blocked" for TP/FP stats (e.g., `-blocked-status 4** -exclude-blocked-status 400,416`).
-- `-exclude-dump-status`: exclude codes/patterns from `-dump-status` output (e.g., `-dump-status 4** -exclude-dump-status 403`).
-- `-strip-headers`: remove reserved/sensitive headers before send (e.g., `-strip-headers host,content-length,transfer-encoding,connection,sec-*`).
-- `-sanitize-url`: percent-encode bare absolute URL after `?` in query (default: true).
-
-### Dataset JSON schema
-Each dataset file is a JSON array of payload objects:
-```json
-[
-  {
-    "method": "GET",
-    "url": "/path?param=...",
-    "headers": {"Header-Name": "Value"},
-    "data": "optional-body"
-  }
-]
-```
-Notes:
-- `url` is relative; the runner automatically prefixes a per-file identifier for log grepping.
-- `headers` optional; `data` optional (used for POST/PUT, etc.).
-
-## Outputs
-
-- Customized Nuclei runner (CSV):
-  - Columns: `template_id, template_file, severity, requests_defined, requests_fired, prevented_count, bypassed_count, errored_count, status_codes`
-  - Supports `-dump-status` to save raw requests matching code filters (e.g., `200,20*,4**`).
-
-- WAF Efficacy Tool (CSV):
-  - Files: `tp_results.csv`, `fp_results.csv`, or `mixed_results.csv` in output dir.
-  - Columns: `test_file, requests_fired, prevented, bypassed, errored, status_codes`
-  - Summary printed to console: Bypass Rate (TP), False Positive Rate (FP), or both (Mixed).
-
-## Modes & Detection Semantics
-
-- `-mode cve` (customizednuclei): Template-centric. A block is considered prevented if WAF blocks any request in the template.
-- `-mode fuzz` (customizednuclei): Request-centric. Counts per-payload bypass vs. prevent.
-- `waf-efficacy-tool`: Defines blocked as HTTP 4xx by default; computes TP/FP depending on dataset type and selected mode.
+---
 
 ## Troubleshooting
 
-- Memory usage spikes when fuzzing large payload sets
-  - Use `-mode fuzz` with appropriate `-c` to shift concurrency to payload threads; the runner streams results to avoid OOM.
-- Requests not firing for templates requiring Interactsh
-  - The preprocessor replaces `{{interactsh-url}}` with a static placeholder to force request emission; ensure your target accepts such requests or exclude those templates.
-- Payload files not found after preprocessing
-  - Relative paths are resolved to absolute during preprocessing; verify templates and wordlists exist on disk.
-- Need to trace per-request raw traffic
-  - Use `-dump-status` and `-dump-file` in either tool to capture raw requests matching status filters.
-
----
-WCB is a highly customized implementation of the Nuclei SDK designed for rigorous security gateway and WAF efficacy measurement.
+- **Memory spikes on large payload sets** — Use `-mode fuzz` (not `-mode cve`); the fuzz runner allocates all concurrency to payload threads and streams results to avoid accumulation.
+- **Requests not firing for Interactsh templates** — The preprocessor replaces `{{interactsh-url}}` with a static placeholder; no Interactsh server needed.
+- **Payload files not found after preprocessing** — Relative payload paths are resolved to absolute during preprocessing; verify templates and wordlists exist on disk relative to the template file.
+- **Raw traffic tracing** — Use `-dump-status` + `-dump-file` in either tool to capture requests matching a status pattern.
