@@ -29,6 +29,7 @@ func ParseFlags() (*Config, error) {
 	flag.StringVar(&cfg.TraceHeaders, "trace-headers", "", "Comma-separated header:value pairs indicating request passed through WAF/proxy (e.g. X-Trace-Proxy:apache,X-Trace-Layer:backend-flask or X-Trace-Proxy:*) (layer 2)")
 	flag.StringVar(&cfg.StripHeaders, "strip-headers", "", "Comma-separated header names/prefixes to strip before send (e.g. Cookie,Origin,Referer,Sec-Fetch-*)")
 	flag.BoolVar(&cfg.SanitizeURL, "sanitize-url", true, "Percent-encode bare absolute URL after '?' (e.g. ?https://...)")
+	flag.BoolVar(&cfg.SkipTLSVerify, "skip-tls-verify", false, "Skip TLS certificate verification (useful for self-signed or mismatched certs)")
 
 	flag.Parse()
 

@@ -2,6 +2,7 @@ package efficacy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,14 +18,21 @@ type HTTPClient struct {
 	traceHeaderFilter    *TraceHeaderFilter
 }
 
-func NewHTTPClient(baseURL string, timeout int, blockedFilter *StatusFilter, excludeBlockedFilter *StatusFilter, traceHeaderFilter *TraceHeaderFilter) *HTTPClient {
+func NewHTTPClient(baseURL string, timeout int, skipTLSVerify bool, blockedFilter *StatusFilter, excludeBlockedFilter *StatusFilter, traceHeaderFilter *TraceHeaderFilter) *HTTPClient {
+	transport := http.DefaultTransport
+	if skipTLSVerify {
+		transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 	return &HTTPClient{
 		baseURL:              baseURL,
 		blockedFilter:        blockedFilter,
 		excludeBlockedFilter: excludeBlockedFilter,
 		traceHeaderFilter:    traceHeaderFilter,
 		client: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout:   time.Duration(timeout) * time.Second,
+			Transport: transport,
 		},
 	}
 }

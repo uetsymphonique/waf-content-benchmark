@@ -75,4 +75,5 @@ type Config struct {
 	TraceHeaders         string
 	StripHeaders         string
 	SanitizeURL          bool
+	SkipTLSVerify        bool
 }

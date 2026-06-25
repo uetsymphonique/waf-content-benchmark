@@ -25,7 +25,7 @@ func main() {
 	blockedFilter := efficacy.ParseStatusFilter(cfg.BlockedStatus)
 	excludeBlockedFilter := efficacy.ParseStatusFilter(cfg.ExcludeBlockedStatus)
 	traceHeaderFilter := efficacy.ParseTraceHeaderFilter(cfg.TraceHeaders)
-	client := efficacy.NewHTTPClient(cfg.WAFURL, cfg.Timeout, blockedFilter, excludeBlockedFilter, traceHeaderFilter)
+	client := efficacy.NewHTTPClient(cfg.WAFURL, cfg.Timeout, cfg.SkipTLSVerify, blockedFilter, excludeBlockedFilter, traceHeaderFilter)
 	analyzer := efficacy.NewResultAnalyzer()
 
 	if err := analyzer.InitWriter(cfg.OutputDir, cfg.Mode); err != nil {
